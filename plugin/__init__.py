@@ -49,6 +49,20 @@ SEARCH_SCHEMA = {
             "limit": {"type": "integer", "description": "Max results (default: 8, max: 25)."},
             "include_summaries": {"type": "boolean", "description": "Include summary nodes (default: true)."},
             "include_messages": {"type": "boolean", "description": "Include raw messages (default: true)."},
+            "kind": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional raw-message kind filter (for example: ['turn']).",
+            },
+            "role": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional raw-message role filter (for example: ['user', 'assistant']).",
+            },
+            "session_id": {"type": "string", "description": "Optional exact session_id filter."},
+            "platform": {"type": "string", "description": "Optional platform filter."},
+            "chat_id": {"type": "string", "description": "Optional chat_id filter."},
+            "thread_id": {"type": "string", "description": "Optional thread_id filter."},
         },
         "required": ["query"],
     },
@@ -166,6 +180,24 @@ def _parse_time_value(value: Any) -> Optional[int]:
         return int(datetime.fromisoformat(normalized).timestamp())
     except ValueError as e:
         raise ValueError(f"invalid datetime: {value}") from e
+
+
+def _normalize_str_list(value: Any) -> List[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, (list, tuple, set)):
+        candidates = list(value)
+    else:
+        candidates = [value]
+
+    out: List[str] = []
+    for item in candidates:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
 
 
 class SessionVaultMemoryProvider(MemoryProvider):
@@ -520,6 +552,12 @@ class SessionVaultMemoryProvider(MemoryProvider):
         limit = int(args.get("limit") or 8)
         include_summaries = bool(args.get("include_summaries", True))
         include_messages = bool(args.get("include_messages", True))
+        kind_filters = _normalize_str_list(args.get("kind"))
+        role_filters = _normalize_str_list(args.get("role"))
+        session_id = str(args.get("session_id") or "").strip()
+        platform = str(args.get("platform") or "").strip()
+        chat_id = str(args.get("chat_id") or "").strip()
+        thread_id = str(args.get("thread_id") or "").strip()
 
         ws, ch, chat_key = self._resolve_scope_filters(scope)
 
@@ -531,11 +569,27 @@ class SessionVaultMemoryProvider(MemoryProvider):
             limit=limit,
             include_summaries=include_summaries,
             include_messages=include_messages,
+            kind=kind_filters,
+            role=role_filters,
+            session_id=session_id,
+            platform=platform,
+            chat_id=chat_id,
+            thread_id=thread_id,
         )
         return json.dumps({
             "query": query,
             "scope": scope,
-            "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key},
+            "filters": {
+                "workspace_name": ws,
+                "channel_name": ch,
+                "chat_key": chat_key,
+                "kind": kind_filters,
+                "role": role_filters,
+                "session_id": session_id,
+                "platform": platform,
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+            },
             "hits": hits,
         }, ensure_ascii=False)
 

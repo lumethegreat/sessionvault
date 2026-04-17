@@ -5,6 +5,7 @@ SessionVault is a local-first, lossless memory plugin for Hermes Agent.
 It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - cross-session search via SQLite FTS5
 - time-range recall by `created_at`
+- structured search filters for `kind`, `role`, and session metadata
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
 - model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_status`, and `sessionvault_doctor`
@@ -36,6 +37,7 @@ Current runtime origin used for this extraction:
 - keeps search indices in SQLite FTS5
 - stores optional summaries in a separate table
 - exposes model tools for search/expand/timeline/status/doctor
+- supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, and `thread_id`
 - preserves context snapshots before Hermes compression via `pre_compress_snapshot`
 - scopes recall by chat/workspace when possible
 
@@ -177,6 +179,11 @@ Expected shape:
 hermes sessionvault search "session split" --scope chat --limit 5
 ```
 
+### Search only real assistant turns
+```bash
+hermes sessionvault search "compression" --scope global --kind turn --role assistant
+```
+
 ### Build a time-based timeline
 ```bash
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
@@ -242,9 +249,9 @@ So this repo should be treated as:
 ## Roadmap
 
 Near-term priorities:
-- structured search filters (`kind`, `role`, `session_id`, `thread_id`)
 - session lineage / split tracking
 - higher-level workflow tools such as recent decisions and plan recovery
+- richer temporal/structured recall on top of the new timeline + filter foundations
 
 ## Related docs
 

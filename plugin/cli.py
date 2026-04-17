@@ -39,6 +39,12 @@ def register_cli(parser) -> None:
         help="Search scope",
     )
     s.add_argument("--limit", type=int, default=8, help="Max results")
+    s.add_argument("--kind", action="append", default=[], help="Filter raw message kind (repeatable)")
+    s.add_argument("--role", action="append", default=[], help="Filter raw message role (repeatable)")
+    s.add_argument("--session-id", default="", help="Filter exact session_id")
+    s.add_argument("--platform", default="", help="Filter platform")
+    s.add_argument("--chat-id", default="", help="Filter chat_id")
+    s.add_argument("--thread-id", default="", help="Filter thread_id")
 
     t = sp.add_parser("timeline", help="List raw messages by created_at range")
     t.add_argument("--from", dest="from_time", required=True, help="Inclusive start of time window (epoch or ISO datetime)")
@@ -87,6 +93,12 @@ def _handle(args) -> None:
             "query": args.query,
             "scope": args.scope,
             "limit": args.limit,
+            "kind": args.kind,
+            "role": args.role,
+            "session_id": args.session_id,
+            "platform": args.platform,
+            "chat_id": args.chat_id,
+            "thread_id": args.thread_id,
         }
         print(prov.handle_tool_call("sessionvault_search", payload))
     elif cmd == "timeline":

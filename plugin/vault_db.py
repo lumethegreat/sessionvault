@@ -364,38 +364,55 @@ class VaultDB:
         limit: int = 8,
         include_summaries: bool = True,
         include_messages: bool = True,
+        kind: Optional[List[str]] = None,
+        role: Optional[List[str]] = None,
+        session_id: str = "",
+        platform: str = "",
+        chat_id: str = "",
+        thread_id: str = "",
     ) -> Dict[str, List[Dict[str, Any]]]:
         """FTS search across messages + summaries.
 
         Filters:
           - If workspace_name+channel_name are provided, use them.
           - Else if scope_chat_key is provided, filter by platform/chat_id.
+          - Structured filters can further constrain sessions/messages.
         """
         q = (query or "").strip()
         if not q:
             return {"summaries": [], "messages": []}
         limit = max(1, min(int(limit or 8), 25))
 
-        session_filter_sql = ""
+        session_where = []
         params: List[Any] = []
+        kind_filter = {str(v).strip() for v in (kind or []) if str(v).strip()}
+        role_filter = {str(v).strip() for v in (role or []) if str(v).strip()}
 
         if workspace_name and channel_name:
-            session_filter_sql = "WHERE workspace_name=? AND channel_name=?"
+            session_where.extend(["workspace_name=?", "channel_name=?"])
             params.extend([workspace_name, channel_name])
-        elif scope_chat_key:
-            # scope_chat_key is platform:chat_id
-            if ":" in scope_chat_key:
-                platform, chat_id = scope_chat_key.split(":", 1)
-                session_filter_sql = "WHERE platform=? AND chat_id=?"
-                params.extend([platform, chat_id])
+        elif scope_chat_key and ":" in scope_chat_key:
+            scoped_platform, scoped_chat_id = scope_chat_key.split(":", 1)
+            session_where.extend(["platform=?", "chat_id=?"])
+            params.extend([scoped_platform, scoped_chat_id])
 
-        # Resolve allowed session_ids first (small set)
+        if session_id:
+            session_where.append("session_id=?")
+            params.append(session_id)
+        if platform:
+            session_where.append("platform=?")
+            params.append(platform)
+        if chat_id:
+            session_where.append("chat_id=?")
+            params.append(chat_id)
+        if thread_id:
+            session_where.append("thread_id=?")
+            params.append(thread_id)
+
         with self._lock:
-            if session_filter_sql:
-                srows = self._conn.execute(
-                    f"SELECT session_id FROM sessions {session_filter_sql}",
-                    tuple(params),
-                ).fetchall()
+            if session_where:
+                sql = "SELECT session_id FROM sessions WHERE " + " AND ".join(session_where)
+                srows = self._conn.execute(sql, tuple(params)).fetchall()
                 allowed = {r[0] for r in srows}
             else:
                 allowed = None
@@ -403,9 +420,6 @@ class VaultDB:
             out_summaries: List[Dict[str, Any]] = []
             out_messages: List[Dict[str, Any]] = []
 
-            # FTS5 query parsing can fail depending on user input.
-            # Retry with a small set of safer fallback queries so callers don't
-            # have to manually escape/sanitize punctuation-heavy terms.
             candidates = [q] + _fts_fallback_queries(q)
             last_err: Optional[Exception] = None
             success = False
@@ -415,7 +429,7 @@ class VaultDB:
                     out_summaries = []
                     out_messages = []
 
-                    if include_summaries:
+                    if include_summaries and not (kind_filter or role_filter):
                         rows = self._conn.execute(
                             """
                             SELECT s.id, s.session_id, s.start_turn, s.end_turn, s.depth,
@@ -443,7 +457,7 @@ class VaultDB:
                     if include_messages:
                         rows = self._conn.execute(
                             """
-                            SELECT m.id, m.session_id, m.turn_index, m.role,
+                            SELECT m.id, m.session_id, m.turn_index, m.role, m.kind,
                                    snippet(messages_fts, 0, '[', ']', '…', 12) AS snip
                             FROM messages_fts
                             JOIN messages m ON m.id = messages_fts.rowid
@@ -451,23 +465,29 @@ class VaultDB:
                             ORDER BY rank
                             LIMIT ?
                             """,
-                            (cq, limit),
+                            (cq, limit * 4),
                         ).fetchall()
-                        for mid, sess, turn_idx, role, snip in rows:
+                        for mid, sess, turn_idx, msg_role, msg_kind, snip in rows:
                             if allowed is not None and sess not in allowed:
+                                continue
+                            if role_filter and msg_role not in role_filter:
+                                continue
+                            if kind_filter and msg_kind not in kind_filter:
                                 continue
                             out_messages.append({
                                 "id": int(mid),
                                 "session_id": sess,
                                 "turn_index": int(turn_idx),
-                                "role": role,
+                                "role": msg_role,
+                                "kind": msg_kind,
                                 "snippet": snip,
                             })
+                            if len(out_messages) >= limit:
+                                break
 
                     success = True
                     break
                 except sqlite3.OperationalError as e:
-                    # Common case: "fts5: syntax error near ..." from MATCH parsing.
                     last_err = e
                     continue
 
