@@ -22,6 +22,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -83,6 +84,30 @@ DOCTOR_SCHEMA = {
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
 
+TIMELINE_SCHEMA = {
+    "name": "sessionvault_timeline",
+    "description": (
+        "Retrieve raw SessionVault messages by created_at time range. "
+        "Useful for answering questions like 'what happened between X and Y?'."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "from": {
+                "description": "Inclusive start of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "to": {
+                "description": "Inclusive end of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "scope": {"type": "string", "enum": ["default", "chat", "workspace", "global"], "description": "Scope (default: default)."},
+            "limit": {"type": "integer", "description": "Max results (default: 25, max: 200)."},
+        },
+        "required": [],
+    },
+}
+
 
 @dataclass
 class _Config:
@@ -120,6 +145,27 @@ def _load_config(hermes_home: str) -> _Config:
     if isinstance(cfg.get("summary_provider"), str):
         d.summary_provider = cfg.get("summary_provider", "")
     return d
+
+
+def _parse_time_value(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("boolean time values are not supported")
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(normalized).timestamp())
+    except ValueError as e:
+        raise ValueError(f"invalid datetime: {value}") from e
 
 
 class SessionVaultMemoryProvider(MemoryProvider):
@@ -398,7 +444,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
     # -- Tooling ---------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA]
+        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, TIMELINE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         try:
@@ -410,6 +456,8 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 return self._tool_status()
             if tool_name == "sessionvault_doctor":
                 return self._tool_doctor()
+            if tool_name == "sessionvault_timeline":
+                return self._tool_timeline(args)
         except Exception as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -446,15 +494,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
             return json.dumps({"error": "not initialized"})
         return json.dumps(self._db.doctor(), ensure_ascii=False)
 
-    def _tool_search(self, args: Dict[str, Any]) -> str:
-        if not self._db:
-            return json.dumps({"error": "not initialized"})
-        query = str(args.get("query") or "").strip()
-        scope = str(args.get("scope") or "default").strip().lower()
-        limit = int(args.get("limit") or 8)
-        include_summaries = bool(args.get("include_summaries", True))
-        include_messages = bool(args.get("include_messages", True))
-
+    def _resolve_scope_filters(self, scope: str) -> Tuple[str, str, str]:
         ws = self._origin.workspace_name
         ch = self._origin.channel_name
         chat_key = self._origin.scope_chat_key()
@@ -464,16 +504,24 @@ class SessionVaultMemoryProvider(MemoryProvider):
             ch = ""
             chat_key = ""
         elif scope == "workspace":
-            # keep workspace, drop channel filter if we can't reliably derive it
             if not ws:
                 ws = self._origin.scope_chat_key()
-            ch = ""  # widen to all channels under this workspace_name bucket
+            ch = ""
         elif scope == "chat":
             ws = ""
             ch = ""
-        else:
-            # default
-            pass
+        return ws, ch, chat_key
+
+    def _tool_search(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        query = str(args.get("query") or "").strip()
+        scope = str(args.get("scope") or "default").strip().lower()
+        limit = int(args.get("limit") or 8)
+        include_summaries = bool(args.get("include_summaries", True))
+        include_messages = bool(args.get("include_messages", True))
+
+        ws, ch, chat_key = self._resolve_scope_filters(scope)
 
         hits = self._db.search(
             query,
@@ -488,6 +536,41 @@ class SessionVaultMemoryProvider(MemoryProvider):
             "query": query,
             "scope": scope,
             "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key},
+            "hits": hits,
+        }, ensure_ascii=False)
+
+    def _tool_timeline(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+
+        scope = str(args.get("scope") or "default").strip().lower()
+        limit = max(1, min(int(args.get("limit") or 25), 200))
+        created_at_from = _parse_time_value(args.get("from"))
+        created_at_to = _parse_time_value(args.get("to"))
+        if created_at_from is None and created_at_to is None:
+            return json.dumps({"error": "at least one of 'from' or 'to' is required"})
+        if created_at_from is not None and created_at_to is not None and created_at_to < created_at_from:
+            return json.dumps({"error": "'to' must be greater than or equal to 'from'"})
+
+        ws, ch, chat_key = self._resolve_scope_filters(scope)
+        session_ids = self._db.list_sessions_by_scope(
+            workspace_name=ws,
+            channel_name=ch,
+            scope_chat_key=chat_key,
+        )
+        if scope == "global":
+            session_ids = []
+
+        hits = self._db.timeline(
+            created_at_from=created_at_from,
+            created_at_to=created_at_to,
+            session_ids=session_ids,
+            limit=limit,
+        )
+        return json.dumps({
+            "scope": scope,
+            "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key},
+            "window": {"from_epoch": created_at_from, "to_epoch": created_at_to},
             "hits": hits,
         }, ensure_ascii=False)
 

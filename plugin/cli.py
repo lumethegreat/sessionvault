@@ -7,6 +7,7 @@ It registers a top-level command group:
 
   hermes sessionvault status
   hermes sessionvault search "query" [--scope default|chat|workspace|global]
+  hermes sessionvault timeline --from <time> [--to <time>] [--scope ...]
   hermes sessionvault doctor
 
 Implementation detail:
@@ -38,6 +39,17 @@ def register_cli(parser) -> None:
         help="Search scope",
     )
     s.add_argument("--limit", type=int, default=8, help="Max results")
+
+    t = sp.add_parser("timeline", help="List raw messages by created_at range")
+    t.add_argument("--from", dest="from_time", required=True, help="Inclusive start of time window (epoch or ISO datetime)")
+    t.add_argument("--to", dest="to_time", help="Inclusive end of time window (epoch or ISO datetime)")
+    t.add_argument(
+        "--scope",
+        default="default",
+        choices=["default", "chat", "workspace", "global"],
+        help="Timeline scope",
+    )
+    t.add_argument("--limit", type=int, default=25, help="Max results")
 
     sp.add_parser("doctor", help="Run integrity checks")
 
@@ -77,5 +89,13 @@ def _handle(args) -> None:
             "limit": args.limit,
         }
         print(prov.handle_tool_call("sessionvault_search", payload))
+    elif cmd == "timeline":
+        payload = {
+            "from": args.from_time,
+            "to": args.to_time,
+            "scope": args.scope,
+            "limit": args.limit,
+        }
+        print(prov.handle_tool_call("sessionvault_timeline", payload))
     else:
         print("Unknown subcommand")

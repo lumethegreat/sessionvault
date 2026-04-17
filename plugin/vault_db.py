@@ -288,6 +288,50 @@ class VaultDB:
             })
         return out
 
+    def timeline(
+        self,
+        *,
+        created_at_from: Optional[int] = None,
+        created_at_to: Optional[int] = None,
+        session_ids: Optional[List[str]] = None,
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 25), 200))
+        where = []
+        params: List[Any] = []
+
+        if created_at_from is not None:
+            where.append("created_at >= ?")
+            params.append(int(created_at_from))
+        if created_at_to is not None:
+            where.append("created_at <= ?")
+            params.append(int(created_at_to))
+        if session_ids:
+            placeholders = ", ".join("?" for _ in session_ids)
+            where.append(f"session_id IN ({placeholders})")
+            params.extend(session_ids)
+
+        sql = "SELECT session_id, turn_index, role, content, kind, created_at FROM messages"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at ASC, id ASC LIMIT ?"
+        params.append(limit)
+
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+
+        out = []
+        for session_id, turn_index, role, content, kind, created_at in rows:
+            out.append({
+                "session_id": session_id,
+                "turn_index": int(turn_index),
+                "role": role,
+                "content": content,
+                "kind": kind,
+                "created_at": int(created_at),
+            })
+        return out
+
     def insert_summary(
         self,
         session_id: str,

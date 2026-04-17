@@ -4,9 +4,10 @@ SessionVault is a local-first, lossless memory plugin for Hermes Agent.
 
 It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - cross-session search via SQLite FTS5
+- time-range recall by `created_at`
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
-- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_status`, and `sessionvault_doctor`
+- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_status`, and `sessionvault_doctor`
 
 ## Why it exists
 
@@ -34,7 +35,7 @@ Current runtime origin used for this extraction:
 - stores every synced user/assistant turn in SQLite
 - keeps search indices in SQLite FTS5
 - stores optional summaries in a separate table
-- exposes model tools for search/expand/status/doctor
+- exposes model tools for search/expand/timeline/status/doctor
 - preserves context snapshots before Hermes compression via `pre_compress_snapshot`
 - scopes recall by chat/workspace when possible
 
@@ -147,6 +148,7 @@ When active, SessionVault registers:
 ```bash
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
+hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
 hermes sessionvault doctor
 ```
 
@@ -154,6 +156,7 @@ hermes sessionvault doctor
 When active, SessionVault exposes these tools to the model:
 - `sessionvault_search`
 - `sessionvault_expand`
+- `sessionvault_timeline`
 - `sessionvault_status`
 - `sessionvault_doctor`
 
@@ -172,6 +175,11 @@ Expected shape:
 ### Search previous context
 ```bash
 hermes sessionvault search "session split" --scope chat --limit 5
+```
+
+### Build a time-based timeline
+```bash
+hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
 ```
 
 ### Run health checks
@@ -234,10 +242,9 @@ So this repo should be treated as:
 ## Roadmap
 
 Near-term priorities:
-- time-range recall by `created_at`
 - structured search filters (`kind`, `role`, `session_id`, `thread_id`)
 - session lineage / split tracking
-- higher-level workflow tools such as timeline and recent decisions
+- higher-level workflow tools such as recent decisions and plan recovery
 
 ## Related docs
 
