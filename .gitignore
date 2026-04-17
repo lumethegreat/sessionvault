@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# Local databases and SQLite sidecars
+*.db
+*.db-shm
+*.db-wal
+
+# Local runtime/config artefacts
+.sessionvault-doctor-*.sha

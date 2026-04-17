@@ -1,0 +1,9 @@
+name: sessionvault
+version: 0.1.0
+description: "SessionVault — local-first lossless per-session memory with cross-session search (scoped by default to workspace/chat) + incremental summaries stored in SQLite."
+hooks:
+  - sync_turn
+  - prefetch
+  - queue_prefetch
+  - on_pre_compress
+  - on_session_end

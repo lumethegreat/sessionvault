@@ -1,0 +1,538 @@
+"""SessionVault memory provider.
+
+Local-first, lossless per-session memory stored in SQLite, with:
+- Cross-session search (default scope: workspace/chat when derivable; fallback: chat)
+- Incremental summaries stored alongside raw messages (raw is never deleted)
+
+Activation:
+  Set `memory.provider: sessionvault` in ~/.hermes/config.yaml
+
+Design notes:
+- This is a *memory provider plugin* (runs alongside builtin MEMORY.md / USER.md).
+- Only one external provider can be active at a time.
+- Workspace is best-effort when the platform exposes it in chat_name; otherwise
+  workspace defaults to chat.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import queue
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from agent.memory_provider import MemoryProvider
+
+from .summarizer import summarize_turns
+from .vault_db import OriginScope, VaultDB, load_origin_from_sessions_index
+
+logger = logging.getLogger(__name__)
+
+
+SEARCH_SCHEMA = {
+    "name": "sessionvault_search",
+    "description": (
+        "Search SessionVault memory (raw messages + summaries). "
+        "Default scope is workspace/chat when available; otherwise chat. "
+        "Use scope='global' to search all sessions in this profile."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query."},
+            "scope": {"type": "string", "enum": ["default", "chat", "workspace", "global"], "description": "Scope (default: default)."},
+            "limit": {"type": "integer", "description": "Max results (default: 8, max: 25)."},
+            "include_summaries": {"type": "boolean", "description": "Include summary nodes (default: true)."},
+            "include_messages": {"type": "boolean", "description": "Include raw messages (default: true)."},
+        },
+        "required": ["query"],
+    },
+}
+
+EXPAND_SCHEMA = {
+    "name": "sessionvault_expand",
+    "description": (
+        "Expand raw messages from a session by turn range. "
+        "Use results from sessionvault_search (session_id + turn_index) to pick a range."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Session ID to expand."},
+            "start_turn": {"type": "integer", "description": "Start turn index (inclusive)."},
+            "end_turn": {"type": "integer", "description": "End turn index (inclusive)."},
+            "max_chars": {"type": "integer", "description": "Safety cap on output size (default: 8000)."},
+        },
+        "required": ["session_id", "start_turn", "end_turn"],
+    },
+}
+
+STATUS_SCHEMA = {
+    "name": "sessionvault_status",
+    "description": "Show SessionVault status (DB path, counts, current scope metadata).",
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+DOCTOR_SCHEMA = {
+    "name": "sessionvault_doctor",
+    "description": "Run SessionVault integrity checks (SQLite + FTS).",
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+
+@dataclass
+class _Config:
+    db_path: str
+    leaf_chunk_turns: int = 24
+    leaf_min_turns: int = 10
+    summary_model: str = ""
+    summary_provider: str = ""
+
+
+def _default_config(hermes_home: str) -> _Config:
+    base = Path(hermes_home) / "sessionvault"
+    return _Config(db_path=str(base / "vault.db"))
+
+
+def _load_config(hermes_home: str) -> _Config:
+    cfg_path = Path(hermes_home) / "sessionvault" / "config.json"
+    cfg = {}
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            cfg = {}
+    d = _default_config(hermes_home)
+    if isinstance(cfg.get("db_path"), str) and cfg.get("db_path"):
+        d.db_path = cfg["db_path"].replace("$HERMES_HOME", str(hermes_home))
+    for k in ("leaf_chunk_turns", "leaf_min_turns"):
+        if cfg.get(k) is not None:
+            try:
+                setattr(d, k, int(cfg[k]))
+            except Exception:
+                pass
+    if isinstance(cfg.get("summary_model"), str):
+        d.summary_model = cfg.get("summary_model", "")
+    if isinstance(cfg.get("summary_provider"), str):
+        d.summary_provider = cfg.get("summary_provider", "")
+    return d
+
+
+class SessionVaultMemoryProvider(MemoryProvider):
+    def __init__(self):
+        self._session_id = ""
+        self._hermes_home = ""
+        self._platform = ""
+        self._agent_context = "primary"
+        self._agent_identity = ""
+
+        self._cfg: Optional[_Config] = None
+        self._db: Optional[VaultDB] = None
+        self._origin: OriginScope = OriginScope(platform="", chat_id="")
+
+        self._turn_counter = 0
+
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_cached = ""
+
+        self._work_q: "queue.Queue[tuple]" = queue.Queue()
+        self._worker: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    @property
+    def name(self) -> str:
+        return "sessionvault"
+
+    def is_available(self) -> bool:
+        # Local SQLite always available.
+        return True
+
+    def get_config_schema(self):
+        from hermes_constants import display_hermes_home
+        default_db = f"{display_hermes_home()}/sessionvault/vault.db"
+        return [
+            {"key": "db_path", "description": "SQLite DB path (profile-scoped). Supports $HERMES_HOME.", "default": default_db},
+            {"key": "leaf_chunk_turns", "description": "Turns per leaf summary chunk (default: 24)", "default": "24"},
+            {"key": "leaf_min_turns", "description": "Minimum turns before summarizing (default: 10)", "default": "10"},
+            {"key": "summary_model", "description": "Optional summary model override (default: use auxiliary compression defaults)", "default": ""},
+            {"key": "summary_provider", "description": "Optional summary provider override", "default": ""},
+        ]
+
+    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        cfg_dir = Path(hermes_home) / "sessionvault"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_path = cfg_dir / "config.json"
+        cfg_path.write_text(json.dumps(values, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def initialize(self, session_id: str, **kwargs) -> None:
+        self._session_id = str(session_id or "")
+        self._hermes_home = str(kwargs.get("hermes_home") or "")
+        self._platform = str(kwargs.get("platform") or "")
+        self._agent_context = str(kwargs.get("agent_context") or "primary")
+        self._agent_identity = str(kwargs.get("agent_identity") or "")
+
+        self._cfg = _load_config(self._hermes_home) if self._hermes_home else _default_config(".")
+        self._db = VaultDB(self._cfg.db_path)
+
+        # Derive origin / scope metadata
+        if self._platform == "cli":
+            self._origin = OriginScope(
+                platform="cli",
+                chat_id="cli",
+                thread_id="",
+                chat_type="cli",
+                chat_name="CLI",
+                user_id=self._agent_identity or "cli",
+                workspace_name=self._agent_identity or "cli",
+                channel_name="#cli",
+            )
+        else:
+            self._origin = load_origin_from_sessions_index(self._hermes_home, self._session_id)
+            if not self._origin.platform:
+                self._origin.platform = self._platform or ""
+
+            # Fallback workspace/channel when not parseable
+            if not self._origin.workspace_name or not self._origin.channel_name:
+                # workspace defaults to chat key; channel defaults to chat_name or chat_id
+                self._origin.workspace_name = self._origin.workspace_name or self._origin.scope_chat_key()
+                self._origin.channel_name = self._origin.channel_name or (self._origin.chat_name or self._origin.chat_id or "")
+
+        self._db.upsert_session(self._session_id, self._origin)
+        self._ensure_worker()
+
+    def _ensure_worker(self) -> None:
+        if self._worker and self._worker.is_alive():
+            return
+
+        def _run():
+            while not self._stop.is_set():
+                try:
+                    item = self._work_q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    break
+                try:
+                    kind = item[0]
+                    if kind == "prefetch":
+                        self._do_prefetch(item[1])
+                    elif kind == "summarize_leaf":
+                        self._do_summarize_leaf(*item[1:])
+                except Exception as e:
+                    logger.debug("SessionVault worker task failed: %s", e)
+                finally:
+                    try:
+                        self._work_q.task_done()
+                    except Exception:
+                        pass
+
+        self._worker = threading.Thread(target=_run, daemon=True, name="sessionvault-worker")
+        self._worker.start()
+
+    # -- Core operations -------------------------------------------------
+
+    def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
+        if self._agent_context != "primary":
+            return
+        if not self._db:
+            return
+
+        # Turn index increments once per *exchange* (user+assistant)
+        self._turn_counter += 1
+        t = self._turn_counter
+
+        try:
+            self._db.append_message(self._session_id, t, "user", (user_content or "").strip(), kind="turn")
+            self._db.append_message(self._session_id, t, "assistant", (assistant_content or "").strip(), kind="turn")
+        except Exception as e:
+            logger.debug("SessionVault sync_turn failed: %s", e)
+            return
+
+        # Summarization trigger (cheap heuristic by turn count)
+        try:
+            if self._cfg and t >= max(self._cfg.leaf_min_turns, self._cfg.leaf_chunk_turns):
+                # Summarize the oldest unsummarized chunk: [1..leaf_chunk_turns], then [leaf_chunk_turns+1..2*leaf_chunk_turns], etc.
+                chunk = int(self._cfg.leaf_chunk_turns)
+                end_turn = (t // chunk) * chunk
+                start_turn = end_turn - chunk + 1
+                if start_turn >= 1:
+                    self._work_q.put(("summarize_leaf", start_turn, end_turn))
+        except Exception:
+            pass
+
+    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        # Schedule background prefetch for next turn.
+        if not query:
+            return
+        self._ensure_worker()
+        try:
+            self._work_q.put(("prefetch", str(query)[:5000]))
+        except Exception:
+            pass
+
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        with self._prefetch_lock:
+            return self._prefetch_cached or ""
+
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        # Ensure we persist a snapshot of what is about to be compacted.
+        if not self._db or not messages:
+            return ""
+        try:
+            text_parts = []
+            for m in messages:
+                r = m.get("role")
+                c = m.get("content")
+                if r in ("user", "assistant") and isinstance(c, str) and c.strip():
+                    text_parts.append(f"{r}: {c.strip()}")
+            snapshot = "\n".join(text_parts)
+            if snapshot.strip():
+                # Store as a special kind under a synthetic turn index
+                t = self._db.last_turn_index(self._session_id) + 1
+                self._db.append_message(self._session_id, t, "system", snapshot[:20000], kind="pre_compress_snapshot")
+        except Exception:
+            pass
+        return ""
+
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+        # Optional: run one more summarize job.
+        try:
+            if self._cfg and self._turn_counter >= self._cfg.leaf_min_turns:
+                chunk = int(self._cfg.leaf_chunk_turns)
+                t = int(self._turn_counter)
+                end_turn = (t // chunk) * chunk
+                start_turn = end_turn - chunk + 1
+                if start_turn >= 1:
+                    self._work_q.put(("summarize_leaf", start_turn, end_turn))
+        except Exception:
+            pass
+
+    # -- Background tasks ------------------------------------------------
+
+    def _do_prefetch(self, query: str) -> None:
+        if not self._db:
+            return
+
+        # Default scope logic:
+        # - If workspace/channel parseable, use it.
+        # - Else, use chat_key.
+        scope_chat_key = self._origin.scope_chat_key()
+        ws = self._origin.workspace_name
+        ch = self._origin.channel_name
+
+        hits = self._db.search(
+            query,
+            workspace_name=ws,
+            channel_name=ch,
+            scope_chat_key=scope_chat_key,
+            limit=6,
+            include_summaries=True,
+            include_messages=True,
+        )
+
+        lines = []
+        if hits.get("summaries"):
+            lines.append("### SessionVault (summaries)")
+            for h in hits["summaries"][:4]:
+                lines.append(
+                    f"- ({h['session_id']} t{h['start_turn']}..t{h['end_turn']}) {h['snippet']}"
+                )
+        if hits.get("messages"):
+            lines.append("### SessionVault (messages)")
+            for h in hits["messages"][:4]:
+                lines.append(
+                    f"- ({h['session_id']} t{h['turn_index']} {h['role']}) {h['snippet']}"
+                )
+
+        block = "\n".join(lines).strip()
+        with self._prefetch_lock:
+            self._prefetch_cached = block
+
+    def _do_summarize_leaf(self, start_turn: int, end_turn: int) -> None:
+        if not self._db or not self._cfg:
+            return
+        # Serialize a compact view of the chunk
+        turns = self._db.get_messages_range(self._session_id, start_turn, end_turn)
+        if not turns:
+            return
+
+        # Avoid summarizing mostly-empty chunks
+        payload_parts = []
+        for t in turns:
+            role = t.get("role", "")
+            content = (t.get("content") or "").strip()
+            if not content:
+                continue
+            if role in ("user", "assistant"):
+                payload_parts.append(f"[{role}] {content[:1800]}")
+        if len(payload_parts) < max(4, int(self._cfg.leaf_min_turns // 2)):
+            return
+
+        serialized = "\n\n".join(payload_parts)
+        summary, src_hash = summarize_turns(
+            serialized,
+            model_override=self._cfg.summary_model,
+            provider_override=self._cfg.summary_provider,
+            timeout=120.0,
+        )
+        if not summary:
+            return
+
+        try:
+            self._db.insert_summary(
+                self._session_id,
+                start_turn,
+                end_turn,
+                summary_text=summary,
+                depth=0,
+                model=self._cfg.summary_model,
+                source_hash=src_hash,
+            )
+        except Exception as e:
+            logger.debug("SessionVault insert_summary failed: %s", e)
+
+    # -- Tooling ---------------------------------------------------------
+
+    def get_tool_schemas(self) -> List[Dict[str, Any]]:
+        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA]
+
+    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+        try:
+            if tool_name == "sessionvault_search":
+                return self._tool_search(args)
+            if tool_name == "sessionvault_expand":
+                return self._tool_expand(args)
+            if tool_name == "sessionvault_status":
+                return self._tool_status()
+            if tool_name == "sessionvault_doctor":
+                return self._tool_doctor()
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+    def _tool_status(self) -> str:
+        if not self._db or not self._cfg:
+            return json.dumps({"error": "not initialized"})
+        d = self._db.doctor()
+        meta = self._db.get_session_meta(self._session_id)
+        return json.dumps({
+            "provider": self.name,
+            "session_id": self._session_id,
+            "db": d,
+            "origin": {
+                "platform": self._origin.platform,
+                "chat_id": self._origin.chat_id,
+                "thread_id": self._origin.thread_id,
+                "workspace_name": self._origin.workspace_name,
+                "channel_name": self._origin.channel_name,
+                "chat_name": self._origin.chat_name,
+            },
+            "session_meta": meta,
+            "config": {
+                "db_path": self._cfg.db_path,
+                "leaf_chunk_turns": self._cfg.leaf_chunk_turns,
+                "leaf_min_turns": self._cfg.leaf_min_turns,
+                "summary_model": self._cfg.summary_model,
+                "summary_provider": self._cfg.summary_provider,
+            }
+        }, ensure_ascii=False)
+
+    def _tool_doctor(self) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        return json.dumps(self._db.doctor(), ensure_ascii=False)
+
+    def _tool_search(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        query = str(args.get("query") or "").strip()
+        scope = str(args.get("scope") or "default").strip().lower()
+        limit = int(args.get("limit") or 8)
+        include_summaries = bool(args.get("include_summaries", True))
+        include_messages = bool(args.get("include_messages", True))
+
+        ws = self._origin.workspace_name
+        ch = self._origin.channel_name
+        chat_key = self._origin.scope_chat_key()
+
+        if scope == "global":
+            ws = ""
+            ch = ""
+            chat_key = ""
+        elif scope == "workspace":
+            # keep workspace, drop channel filter if we can't reliably derive it
+            if not ws:
+                ws = self._origin.scope_chat_key()
+            ch = ""  # widen to all channels under this workspace_name bucket
+        elif scope == "chat":
+            ws = ""
+            ch = ""
+        else:
+            # default
+            pass
+
+        hits = self._db.search(
+            query,
+            workspace_name=ws,
+            channel_name=ch,
+            scope_chat_key=chat_key,
+            limit=limit,
+            include_summaries=include_summaries,
+            include_messages=include_messages,
+        )
+        return json.dumps({
+            "query": query,
+            "scope": scope,
+            "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key},
+            "hits": hits,
+        }, ensure_ascii=False)
+
+    def _tool_expand(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        sid = str(args.get("session_id") or "").strip()
+        start_turn = int(args.get("start_turn") or 0)
+        end_turn = int(args.get("end_turn") or 0)
+        max_chars = int(args.get("max_chars") or 8000)
+        if not sid or start_turn <= 0 or end_turn <= 0 or end_turn < start_turn:
+            return json.dumps({"error": "session_id, start_turn, end_turn required"})
+
+        msgs = self._db.get_messages_range(sid, start_turn, end_turn)
+        # Format as a readable block and cap
+        text_lines = []
+        for m in msgs:
+            text_lines.append(f"t{m['turn_index']} {m['role']}: {m['content']}")
+        blob = "\n".join(text_lines)
+        if len(blob) > max_chars:
+            blob = blob[: max_chars - 200] + "\n...[truncated]...\n" + blob[-150:]
+        return json.dumps({
+            "session_id": sid,
+            "start_turn": start_turn,
+            "end_turn": end_turn,
+            "text": blob,
+        }, ensure_ascii=False)
+
+    def shutdown(self) -> None:
+        try:
+            self._stop.set()
+            try:
+                self._work_q.put(None)
+            except Exception:
+                pass
+            if self._worker and self._worker.is_alive():
+                self._worker.join(timeout=2.0)
+        except Exception:
+            pass
+        try:
+            if self._db:
+                self._db.close()
+        except Exception:
+            pass
+
+
+def register(ctx) -> None:
+    ctx.register_memory_provider(SessionVaultMemoryProvider())
