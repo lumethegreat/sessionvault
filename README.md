@@ -38,8 +38,7 @@ It is **not** a native built-in Hermes plugin.
 
 Current runtime origin used for this extraction:
 - runtime plugin: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
-- backup copy: `~/.hermes/local-plugins/sessionvault`
-- helper scripts: `~/.hermes/scripts/*sessionvault*`
+- repo scripts: `/Users/mestre/projects/sessionvault/scripts`
 
 ## Feature overview
 

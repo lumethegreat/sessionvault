@@ -4,7 +4,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 RUNTIME_DIR="$HERMES_HOME/hermes-agent/plugins/memory/sessionvault"
-BACKUP_DIR="$HERMES_HOME/local-plugins/sessionvault"
 DATA_DIR="$HERMES_HOME/sessionvault"
 SRC_DIR="$REPO_ROOT/plugin"
 GATEWAY_PATCH_MODE="check"
@@ -13,11 +12,10 @@ GATEWAY_PATCH_SCRIPT="$REPO_ROOT/scripts/sessionvault-gateway-patch.sh"
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") [--with-gateway-patch] [--skip-gateway-patch-check]
+  $(basename "$0") [--with-gateway-patch]
 
 Options:
   --with-gateway-patch        Apply the SessionVault gateway patch after installing plugin code.
-  --skip-gateway-patch-check  Skip gateway patch verification during install.
 EOF
 }
 
@@ -25,10 +23,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-gateway-patch)
       GATEWAY_PATCH_MODE="apply"
-      shift
-      ;;
-    --skip-gateway-patch-check)
-      GATEWAY_PATCH_MODE="skip"
       shift
       ;;
     -h|--help)
@@ -48,14 +42,10 @@ if [[ ! -d "$SRC_DIR" ]]; then
   exit 1
 fi
 
-mkdir -p "$(dirname "$RUNTIME_DIR")" "$BACKUP_DIR" "$DATA_DIR"
+mkdir -p "$(dirname "$RUNTIME_DIR")" "$DATA_DIR"
 rm -rf "$RUNTIME_DIR"
 mkdir -p "$RUNTIME_DIR"
 rsync -a --delete --exclude '__pycache__/' "$SRC_DIR/" "$RUNTIME_DIR/"
-
-rm -rf "$BACKUP_DIR"
-mkdir -p "$BACKUP_DIR"
-rsync -a --delete --exclude '__pycache__/' "$SRC_DIR/" "$BACKUP_DIR/"
 
 DB_PATH="$DATA_DIR/vault.db"
 if [[ -f "$DB_PATH" ]]; then
@@ -98,9 +88,6 @@ case "$GATEWAY_PATCH_MODE" in
         ;;
     esac
     ;;
-  skip)
-    echo "ℹ Skipping gateway patch verification"
-    ;;
   *)
     echo "✗ Unknown gateway patch mode: $GATEWAY_PATCH_MODE" >&2
     exit 64
@@ -108,7 +95,6 @@ case "$GATEWAY_PATCH_MODE" in
 esac
 
 echo "✓ Installed SessionVault plugin to: $RUNTIME_DIR"
-echo "✓ Refreshed backup copy at: $BACKUP_DIR"
 echo "→ Next steps:"
 echo "  1) Ensure ~/.hermes/config.yaml has memory.provider: sessionvault"
 echo "  2) Restart Hermes gateway or CLI"

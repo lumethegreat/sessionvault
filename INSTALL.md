@@ -40,7 +40,6 @@ From the repo root:
 
 This will:
 - copy `plugin/` into `~/.hermes/hermes-agent/plugins/memory/sessionvault`
-- refresh the backup copy in `~/.hermes/local-plugins/sessionvault`
 - preserve any existing DB under `~/.hermes/sessionvault/`
 - create `~/.hermes/sessionvault/` if missing
 - apply the documented gateway lifecycle patch idempotently
@@ -119,7 +118,6 @@ Useful if you made emergency runtime edits and want to capture them here.
 This checks:
 - repo plugin files
 - runtime plugin files
-- backup plugin files
 - DB presence/counts
 - configured provider in `~/.hermes/config.yaml`
 - gateway lifecycle patch status (`applied` / `not applied` / `drift detected`)

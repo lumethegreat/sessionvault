@@ -6,7 +6,6 @@ HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PROJECT_ROOT="$HERMES_HOME/hermes-agent"
 REPO_PLUGIN="$REPO_ROOT/plugin"
 RUNTIME_PLUGIN="$PROJECT_ROOT/plugins/memory/sessionvault"
-BACKUP_PLUGIN="$HERMES_HOME/local-plugins/sessionvault"
 CONFIG_YAML="$HERMES_HOME/config.yaml"
 VAULT_DB="$HERMES_HOME/sessionvault/vault.db"
 GATEWAY_PATCH_SCRIPT="$REPO_ROOT/scripts/sessionvault-gateway-patch.sh"
@@ -48,14 +47,13 @@ PY
 echo "sessionvault doctor"
 echo "  repo:    $REPO_PLUGIN"
 echo "  runtime: $RUNTIME_PLUGIN"
-echo "  backup:  $BACKUP_PLUGIN"
 echo "  db:      $VAULT_DB"
 echo
 
 echo "→ config memory.provider: '$(provider_value)'"
 echo
 
-for path in "$REPO_PLUGIN" "$RUNTIME_PLUGIN" "$BACKUP_PLUGIN"; do
+for path in "$REPO_PLUGIN" "$RUNTIME_PLUGIN"; do
   if [[ -d "$path" ]]; then
     echo "✓ Present: $path"
   else
