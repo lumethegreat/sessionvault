@@ -65,8 +65,6 @@ Current runtime origin used for this extraction:
 - `plugin/` — the plugin code installed into Hermes runtime
 - `scripts/install.sh` — install plugin code into Hermes runtime and verify gateway patch status
 - `scripts/sessionvault-gateway-patch.sh` — apply/check the local gateway lifecycle patch idempotently
-- `scripts/sync-from-runtime.sh` — refresh this repo from current runtime plugin
-- `scripts/sync-to-runtime.sh` — push repo plugin code into Hermes runtime
 - `scripts/sessionvault-doctor.sh` — inspect repo/runtime/data status
 - `references/hermes-gateway-run-sessionvault-events.patch` — local gateway patch that records gateway/session-control events into SessionVault
 - `INSTALL.md` — installation and upgrade instructions
@@ -114,7 +112,7 @@ Rules:
 - if the DB already exists, SessionVault reuses it and preserves history
 - if the DB does not exist, SessionVault creates the directory, SQLite file, and schema automatically on first initialization
 - this repository does **not** version the DB
-- install/sync scripts do **not** delete the DB
+- install scripts do **not** delete the DB
 
 ## Quick start
 
@@ -260,7 +258,7 @@ hermes sessionvault doctor
 - The install flow only copies plugin code unless you opt into `--with-gateway-patch`.
 - The SQLite DB in `~/.hermes/sessionvault/` is preserved.
 - If the DB is absent, the plugin creates it on first use.
-- Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; use the sync scripts to reconcile.
+- Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; reinstall from the repo to re-align them.
 - Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
 - `scripts/sessionvault-gateway-patch.sh` can verify whether that patch is already present or apply it idempotently.
 - Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.
@@ -285,19 +283,19 @@ Run:
 ./scripts/sessionvault-gateway-patch.sh --check
 ```
 
-Then, depending on the direction you want:
+Then re-align from the repo with:
 
 ```bash
-./scripts/sync-from-runtime.sh
-# or
-./scripts/sync-to-runtime.sh
-# or ensure the gateway patch is present
+./scripts/install.sh
+# or ensure the gateway patch is present too
+./scripts/install.sh --with-gateway-patch
+# or apply just the gateway patch
 ./scripts/sessionvault-gateway-patch.sh --apply
 ```
 
 ### “Will this repo overwrite my history?”
 No. The repo versions plugin code only.
-The database stays in `~/.hermes/sessionvault/` and is not deleted by install/sync scripts.
+The database stays in `~/.hermes/sessionvault/` and is not deleted by install scripts.
 
 ## Development notes
 

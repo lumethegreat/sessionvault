@@ -92,23 +92,6 @@ hermes sessionvault status
 hermes sessionvault doctor
 ```
 
-## Sync workflows
-
-### Pull current runtime plugin into this repo
-Useful if you made emergency runtime edits and want to capture them here.
-
-```bash
-./scripts/sync-from-runtime.sh
-```
-
-### Push repo plugin code into runtime
-
-```bash
-./scripts/sync-to-runtime.sh
-```
-
-`install.sh` already does this, plus backup/data-dir checks.
-
 ## Doctor
 
 ```bash
