@@ -10,7 +10,7 @@ It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - structured lifecycle events (`session_initialized`, `pre_compress`, `session_end`, ...)
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
-- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_recent_decisions`, `sessionvault_what_were_we_doing`, `sessionvault_status`, and `sessionvault_doctor`
+- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_status`, and `sessionvault_doctor`
 
 ## Why it exists
 
@@ -19,8 +19,17 @@ Hermes already has built-in profile memory (`MEMORY.md` / `USER.md`), but that i
 SessionVault exists to give Hermes a durable, searchable, local conversation store that can:
 - preserve raw turns verbatim
 - recover context across sessions
-- answer “what were we doing?” with evidence
+- reconstruct conversations and lifecycle changes with evidence
 - keep working offline for storage/search/expand/doctor operations
+
+### Scope boundary
+SessionVault is intended to stay **minimalist and specific**:
+- storage of raw turns and metadata
+- deterministic retrieval / filtering / expansion
+- temporal recall and lifecycle forensics
+
+It should **not** grow into a high-level workflow/planning layer.
+If richer workflow helpers are needed in the future, they should live above SessionVault and consume its deterministic outputs rather than expand the plugin's core mandate.
 
 ## Status
 
@@ -39,7 +48,6 @@ Current runtime origin used for this extraction:
 - keeps search indices in SQLite FTS5
 - stores optional summaries in a separate table
 - exposes model tools for search/expand/timeline/status/doctor
-- supports higher-level operational recall helpers such as `recent decisions` and `what were we doing`
 - supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, and `thread_id`
 - tracks session continuity through `previous_session_id`, `split_from_session_id`, `split_reason`, and `resumed_from_session_id`
 - stores structured lifecycle events in an `events` table for operational forensics
@@ -51,6 +59,7 @@ Current runtime origin used for this extraction:
 - a replacement for Hermes built-in user/profile memory
 - a hosted/cloud memory service
 - a versioned storage location for `vault.db`
+- a high-level workflow or planning layer
 
 ## Repository layout
 
@@ -158,30 +167,39 @@ hermes sessionvault doctor
 ## CLI and tool usage
 
 ### CLI
-When active, SessionVault registers:
+When active, SessionVault registers core retrieval/forensics commands:
 
 ```bash
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
-hermes sessionvault recent-decisions --scope chat --limit 5
-hermes sessionvault what-were-we-doing --scope chat --limit 5
 hermes sessionvault lineage
 hermes sessionvault doctor
 ```
 
+The current build also contains a small number of deterministic convenience views derived from the same raw data:
+
+```bash
+hermes sessionvault recent-decisions --scope chat --limit 5
+hermes sessionvault what-were-we-doing --scope chat --limit 5
+```
+
+These are intentionally treated as edge helpers, not as the growth direction of the plugin.
+
 ### Model tools
-When active, SessionVault exposes these tools to the model:
+When active, SessionVault exposes these core tools to the model:
 - `sessionvault_search`
 - `sessionvault_expand`
 - `sessionvault_events`
 - `sessionvault_timeline`
 - `sessionvault_lineage`
-- `sessionvault_recent_decisions`
-- `sessionvault_what_were_we_doing`
 - `sessionvault_status`
 - `sessionvault_doctor`
+
+The current build also includes deterministic convenience views derived from the same stored data:
+- `sessionvault_recent_decisions`
+- `sessionvault_what_were_we_doing`
 
 ## Examples
 
@@ -220,13 +238,9 @@ hermes sessionvault events --scope global --event-type pre_compress --limit 10
 hermes sessionvault lineage
 ```
 
-### Extract recent decisions
+### Optional convenience views (edge helpers, not core scope)
 ```bash
 hermes sessionvault recent-decisions --scope chat --limit 5
-```
-
-### Rebuild the latest operational context
-```bash
 hermes sessionvault what-were-we-doing --scope chat --limit 5
 ```
 
@@ -301,9 +315,10 @@ So this repo should be treated as:
 ## Roadmap
 
 Near-term priorities:
-- higher-level workflow tools such as recent decisions and plan recovery
-- richer temporal/structured recall on top of the new timeline + filter foundations
-- broader lifecycle capture from gateway/session-control paths (stop, split, restart, expiry)
+- keep the plugin narrowly focused on deterministic storage / retrieval / forensics
+- harden temporal and structured recall on top of the current timeline + filter foundations
+- broaden lifecycle capture from gateway/session-control paths (stop, split, restart, expiry)
+- improve maintainability and compatibility checks after Hermes updates
 
 ## Related docs
 

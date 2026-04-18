@@ -177,20 +177,40 @@ Notes:
 
 ---
 
+## Scope boundary
+
+SessionVault is intended to remain a **minimalist memory substrate**:
+
+- lossless storage of turns and metadata
+- deterministic retrieval / filtering / expansion
+- timeline / lineage / event-based forensics
+
+It is **not** meant to become a high-level workflow or planning layer.
+If richer workflow helpers are useful, they should sit above SessionVault and consume its deterministic outputs.
+
+---
+
 ## CLI usage
 
-When `memory.provider == sessionvault`, Hermes registers:
+When `memory.provider == sessionvault`, Hermes registers the core retrieval/forensics commands:
 
 ```bash
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00"
-hermes sessionvault recent-decisions --scope chat --limit 5
-hermes sessionvault what-were-we-doing --scope chat --limit 5
 hermes sessionvault lineage
 hermes sessionvault doctor
 ```
+
+The current build also includes deterministic convenience views derived from the same stored data:
+
+```bash
+hermes sessionvault recent-decisions --scope chat --limit 5
+hermes sessionvault what-were-we-doing --scope chat --limit 5
+```
+
+These convenience views are edge helpers, not the intended growth direction of the plugin.
 
 Additionally:
 
@@ -204,17 +224,20 @@ is the canonical way to confirm which external provider is active.
 
 ## Tools exposed to the model
 
-When active, SessionVault injects 9 tool schemas into Hermes’ tool surface:
+When active, SessionVault injects these core tool schemas into Hermes’ tool surface:
 
 - `sessionvault_search`
 - `sessionvault_expand`
 - `sessionvault_events`
 - `sessionvault_timeline`
 - `sessionvault_lineage`
-- `sessionvault_recent_decisions`
-- `sessionvault_what_were_we_doing`
 - `sessionvault_status`
 - `sessionvault_doctor`
+
+The current build also includes deterministic convenience views derived from the same stored data:
+
+- `sessionvault_recent_decisions`
+- `sessionvault_what_were_we_doing`
 
 These are called by the model automatically when it needs cross-session recall.
 
