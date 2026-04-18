@@ -10,6 +10,7 @@ It registers a top-level command group:
   hermes sessionvault events [--from <time>] [--to <time>] [--scope ...]
   hermes sessionvault timeline --from <time> [--to <time>] [--scope ...]
   hermes sessionvault recent-decisions [--from <time>] [--to <time>] [--scope ...]
+  hermes sessionvault what-were-we-doing [--from <time>] [--to <time>] [--scope ...]
   hermes sessionvault lineage [session_id]
   hermes sessionvault doctor
 
@@ -84,6 +85,18 @@ def register_cli(parser) -> None:
     rd.add_argument("--limit", type=int, default=8, help="Max decisions to return")
     rd.add_argument("--scan-limit", type=int, default=80, help="How many recent raw messages to scan before filtering")
 
+    w = sp.add_parser("what-were-we-doing", help="Return structured operational recall")
+    w.add_argument("--from", dest="from_time", help="Inclusive start of time window (epoch or ISO datetime)")
+    w.add_argument("--to", dest="to_time", help="Inclusive end of time window (epoch or ISO datetime)")
+    w.add_argument(
+        "--scope",
+        default="default",
+        choices=["default", "chat", "workspace", "global"],
+        help="Recall scope",
+    )
+    w.add_argument("--limit", type=int, default=5, help="Max decision/event hits to keep in the structured recall")
+    w.add_argument("--scan-limit", type=int, default=80, help="How many recent raw messages to scan before filtering")
+
     l = sp.add_parser("lineage", help="Show session lineage / continuity")
     l.add_argument("session_id", nargs="?", default="", help="Optional target session_id (defaults to current session)")
 
@@ -157,6 +170,15 @@ def _handle(args) -> None:
             "scan_limit": args.scan_limit,
         }
         print(prov.handle_tool_call("sessionvault_recent_decisions", payload))
+    elif cmd == "what-were-we-doing":
+        payload = {
+            "from": args.from_time,
+            "to": args.to_time,
+            "scope": args.scope,
+            "limit": args.limit,
+            "scan_limit": args.scan_limit,
+        }
+        print(prov.handle_tool_call("sessionvault_what_were_we_doing", payload))
     elif cmd == "lineage":
         payload = {"session_id": args.session_id}
         print(prov.handle_tool_call("sessionvault_lineage", payload))

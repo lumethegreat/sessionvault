@@ -187,6 +187,7 @@ hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00"
 hermes sessionvault recent-decisions --scope chat --limit 5
+hermes sessionvault what-were-we-doing --scope chat --limit 5
 hermes sessionvault lineage
 hermes sessionvault doctor
 ```
@@ -203,7 +204,7 @@ is the canonical way to confirm which external provider is active.
 
 ## Tools exposed to the model
 
-When active, SessionVault injects 8 tool schemas into Hermes’ tool surface:
+When active, SessionVault injects 9 tool schemas into Hermes’ tool surface:
 
 - `sessionvault_search`
 - `sessionvault_expand`
@@ -211,6 +212,7 @@ When active, SessionVault injects 8 tool schemas into Hermes’ tool surface:
 - `sessionvault_timeline`
 - `sessionvault_lineage`
 - `sessionvault_recent_decisions`
+- `sessionvault_what_were_we_doing`
 - `sessionvault_status`
 - `sessionvault_doctor`
 

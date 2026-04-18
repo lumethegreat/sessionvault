@@ -182,6 +182,31 @@ RECENT_DECISIONS_SCHEMA = {
     },
 }
 
+WHAT_WERE_WE_DOING_SCHEMA = {
+    "name": "sessionvault_what_were_we_doing",
+    "description": (
+        "Return a deterministic operational recall of the latest context: last user/assistant turns, "
+        "recent decisions, and recent lifecycle events."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "from": {
+                "description": "Inclusive start of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "to": {
+                "description": "Inclusive end of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "scope": {"type": "string", "enum": ["default", "chat", "workspace", "global"], "description": "Scope (default: default)."},
+            "limit": {"type": "integer", "description": "Max decision/event hits to keep in the structured recall (default: 5, max: 20)."},
+            "scan_limit": {"type": "integer", "description": "How many recent raw messages to scan before filtering (default: 80, max: 500)."},
+        },
+        "required": [],
+    },
+}
+
 _DECISION_RULES = [
     ("decid", re.compile(r"\b(decid\w*|decis(?:ion|ão|oes|ões))\b", re.IGNORECASE)),
     ("próximo passo", re.compile(r"\bpr[oó]ximo passo\b", re.IGNORECASE)),
@@ -595,7 +620,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
     # -- Tooling ---------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, EVENTS_SCHEMA, TIMELINE_SCHEMA, LINEAGE_SCHEMA, RECENT_DECISIONS_SCHEMA]
+        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, EVENTS_SCHEMA, TIMELINE_SCHEMA, LINEAGE_SCHEMA, RECENT_DECISIONS_SCHEMA, WHAT_WERE_WE_DOING_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         try:
@@ -615,6 +640,8 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 return self._tool_lineage(args)
             if tool_name == "sessionvault_recent_decisions":
                 return self._tool_recent_decisions(args)
+            if tool_name == "sessionvault_what_were_we_doing":
+                return self._tool_what_were_we_doing(args)
         except Exception as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -737,9 +764,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
             matched_rules = [name for name, pattern in _DECISION_RULES if pattern.search(content)]
             if not matched_rules:
                 continue
-            excerpt = re.sub(r"\s+", " ", content).strip()
-            if len(excerpt) > 240:
-                excerpt = excerpt[:237] + "..."
+            excerpt = self._make_excerpt(content)
             hits.append({
                 "session_id": row["session_id"],
                 "turn_index": row["turn_index"],
@@ -758,6 +783,101 @@ class SessionVaultMemoryProvider(MemoryProvider):
             "scan_limit": scan_limit,
             "hits": hits,
         }, ensure_ascii=False)
+
+    def _tool_what_were_we_doing(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+
+        scope = str(args.get("scope") or "default").strip().lower()
+        limit = max(1, min(int(args.get("limit") or 5), 20))
+        scan_limit = max(limit, min(int(args.get("scan_limit") or 80), 500))
+        created_at_from = _parse_time_value(args.get("from"))
+        created_at_to = _parse_time_value(args.get("to"))
+        if created_at_from is not None and created_at_to is not None and created_at_to < created_at_from:
+            return json.dumps({"error": "'to' must be greater than or equal to 'from'"})
+
+        ws, ch, chat_key = self._resolve_scope_filters(scope)
+        session_ids = self._db.list_sessions_by_scope(
+            workspace_name=ws,
+            channel_name=ch,
+            scope_chat_key=chat_key,
+        )
+        if scope == "global":
+            session_ids = []
+
+        recent_rows = self._db.recent_messages(
+            session_ids=session_ids,
+            created_at_from=created_at_from,
+            created_at_to=created_at_to,
+            limit=scan_limit,
+        )
+        recent_events = self._db.get_events(
+            session_ids=session_ids,
+            created_at_from=created_at_from,
+            created_at_to=created_at_to,
+            limit=limit,
+        )
+        decisions_payload = json.loads(self._tool_recent_decisions({
+            "scope": scope,
+            "limit": limit,
+            "scan_limit": scan_limit,
+            "from": args.get("from"),
+            "to": args.get("to"),
+        }))
+        recent_decisions = decisions_payload.get("hits", []) if isinstance(decisions_payload, dict) else []
+
+        latest_user_turn = None
+        latest_assistant_turn = None
+        for row in recent_rows:
+            if row.get("kind") != "turn":
+                continue
+            role = str(row.get("role") or "").strip().lower()
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            item = {
+                "session_id": row["session_id"],
+                "turn_index": row["turn_index"],
+                "role": role,
+                "created_at": row["created_at"],
+                "excerpt": self._make_excerpt(content),
+            }
+            if role == "user" and latest_user_turn is None:
+                latest_user_turn = item
+            elif role == "assistant" and latest_assistant_turn is None:
+                latest_assistant_turn = item
+            if latest_user_turn and latest_assistant_turn:
+                break
+
+        summary_lines = []
+        if latest_user_turn:
+            summary_lines.append(f"Último pedido do utilizador: {latest_user_turn['excerpt']}")
+        if latest_assistant_turn:
+            summary_lines.append(f"Última resposta do assistente: {latest_assistant_turn['excerpt']}")
+        if recent_decisions:
+            summary_lines.append(f"Próximo passo / decisão recente: {recent_decisions[0]['excerpt']}")
+        if recent_events:
+            event_names = ", ".join(ev.get("event_type", "") for ev in recent_events[:limit] if ev.get("event_type"))
+            if event_names:
+                summary_lines.append(f"Eventos recentes: {event_names}")
+
+        return json.dumps({
+            "scope": scope,
+            "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key},
+            "window": {"from_epoch": created_at_from, "to_epoch": created_at_to},
+            "scan_limit": scan_limit,
+            "latest_user_turn": latest_user_turn,
+            "latest_assistant_turn": latest_assistant_turn,
+            "recent_decisions": recent_decisions,
+            "recent_events": recent_events,
+            "summary_lines": summary_lines,
+        }, ensure_ascii=False)
+
+    def _make_excerpt(self, content: str, max_len: int = 240) -> str:
+        excerpt = re.sub(r"\s+", " ", str(content or "")).strip()
+        if len(excerpt) > max_len:
+            excerpt = excerpt[: max_len - 3] + "..."
+        return excerpt
 
     def _resolve_scope_filters(self, scope: str) -> Tuple[str, str, str]:
         ws = self._origin.workspace_name

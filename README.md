@@ -10,7 +10,7 @@ It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - structured lifecycle events (`session_initialized`, `pre_compress`, `session_end`, ...)
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
-- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_recent_decisions`, `sessionvault_status`, and `sessionvault_doctor`
+- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_recent_decisions`, `sessionvault_what_were_we_doing`, `sessionvault_status`, and `sessionvault_doctor`
 
 ## Why it exists
 
@@ -39,6 +39,7 @@ Current runtime origin used for this extraction:
 - keeps search indices in SQLite FTS5
 - stores optional summaries in a separate table
 - exposes model tools for search/expand/timeline/status/doctor
+- supports higher-level operational recall helpers such as `recent decisions` and `what were we doing`
 - supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, and `thread_id`
 - tracks session continuity through `previous_session_id`, `split_from_session_id`, `split_reason`, and `resumed_from_session_id`
 - stores structured lifecycle events in an `events` table for operational forensics
@@ -165,6 +166,7 @@ hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
 hermes sessionvault recent-decisions --scope chat --limit 5
+hermes sessionvault what-were-we-doing --scope chat --limit 5
 hermes sessionvault lineage
 hermes sessionvault doctor
 ```
@@ -177,6 +179,7 @@ When active, SessionVault exposes these tools to the model:
 - `sessionvault_timeline`
 - `sessionvault_lineage`
 - `sessionvault_recent_decisions`
+- `sessionvault_what_were_we_doing`
 - `sessionvault_status`
 - `sessionvault_doctor`
 
@@ -220,6 +223,11 @@ hermes sessionvault lineage
 ### Extract recent decisions
 ```bash
 hermes sessionvault recent-decisions --scope chat --limit 5
+```
+
+### Rebuild the latest operational context
+```bash
+hermes sessionvault what-were-we-doing --scope chat --limit 5
 ```
 
 ### Ensure the gateway patch is present
