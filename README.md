@@ -83,8 +83,9 @@ Main hooks in the plugin:
 - `on_session_end(messages)`
 
 ### Storage model
-By default the plugin uses:
-- `~/.hermes/sessionvault/vault.db`
+By default the plugin uses the active profile's Hermes home:
+- default profile: `~/.hermes/sessionvault/vault.db`
+- named profile: `~/.hermes/profiles/<name>/sessionvault/vault.db`
 
 High-level SQLite schema:
 - `sessions` — session metadata and scope fields
@@ -120,17 +121,25 @@ Rules:
 From the repo root:
 
 ```bash
-./scripts/install.sh --with-gateway-patch
-```
-
-If you only want to install plugin code and verify patch status without modifying `gateway/run.py`:
-
-```bash
+# default profile
 ./scripts/install.sh
+./scripts/install.sh --with-gateway-patch
+
+# named profile
+./scripts/install.sh --profile kimi
+./scripts/install.sh --profile kimi --with-gateway-patch
 ```
+
+The install script is idempotent for the shared runtime:
+- if runtime plugin code already matches the repo, it skips reinstall
+- if runtime plugin code differs, it re-aligns the shared runtime
+- `--profile` only changes the target config/data home, not the shared runtime path
 
 ### 2) Activate SessionVault in Hermes config
-Ensure `~/.hermes/config.yaml` contains:
+Ensure the target profile config contains `memory.provider: sessionvault`:
+
+- default profile: `~/.hermes/config.yaml`
+- named profile: `~/.hermes/profiles/<name>/config.yaml`
 
 ```yaml
 memory:
@@ -156,10 +165,11 @@ hermes sessionvault doctor
 ## Typical workflow
 
 1. Edit code in this repo.
-2. Run `scripts/install.sh --with-gateway-patch` when you want to keep the runtime patch in sync.
-3. Restart Hermes gateway or CLI.
-4. Verify with `hermes memory status`, `hermes sessionvault status`, and `./scripts/sessionvault-doctor.sh`.
-5. Use `./scripts/sessionvault-gateway-patch.sh --check` if gateway/runtime drift is suspected.
+2. Run `scripts/install.sh` or `scripts/install.sh --profile <name>` to align the shared runtime and prepare the target profile.
+3. Add `--with-gateway-patch` when you also want to ensure the shared gateway patch.
+4. Restart Hermes gateway or CLI.
+5. Verify with `hermes memory status`, `hermes sessionvault status`, and `./scripts/sessionvault-doctor.sh [--profile <name>]`.
+6. Use `./scripts/sessionvault-gateway-patch.sh --check` if gateway/runtime drift is suspected.
 
 ## CLI and tool usage
 
@@ -255,10 +265,12 @@ hermes sessionvault doctor
 
 ## Safety and operational notes
 
-- The install flow only copies plugin code unless you opt into `--with-gateway-patch`.
-- The SQLite DB in `~/.hermes/sessionvault/` is preserved.
-- If the DB is absent, the plugin creates it on first use.
+- The install flow targets a **shared runtime** plus a **selected profile home**.
+- The install flow only applies the gateway patch when you opt into `--with-gateway-patch`.
+- The target profile SQLite DB is preserved.
+- If the target profile DB is absent, the plugin creates it on first use.
 - Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; reinstall from the repo to re-align them.
+- `scripts/install.sh` now skips reinstall when the shared runtime plugin is already aligned with the repo.
 - Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
 - `scripts/sessionvault-gateway-patch.sh` can verify whether that patch is already present or apply it idempotently.
 - Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.
@@ -266,20 +278,21 @@ hermes sessionvault doctor
 ## Troubleshooting
 
 ### “SessionVault is installed but not active”
-- check `~/.hermes/config.yaml`
+- check the target profile config (`~/.hermes/config.yaml` or `~/.hermes/profiles/<name>/config.yaml`)
 - verify `memory.provider: sessionvault`
 - restart Hermes gateway or CLI
 - run `hermes memory status`
 
 ### “The DB does not exist yet”
 That is acceptable on a fresh install.
-SessionVault creates `~/.hermes/sessionvault/vault.db` automatically on first initialization.
+SessionVault creates the target profile DB automatically on first initialization.
 
 ### “Runtime and repo may be out of sync”
 Run:
 
 ```bash
 ./scripts/sessionvault-doctor.sh
+./scripts/sessionvault-doctor.sh --profile kimi
 ./scripts/sessionvault-gateway-patch.sh --check
 ```
 
@@ -287,15 +300,17 @@ Then re-align from the repo with:
 
 ```bash
 ./scripts/install.sh
+./scripts/install.sh --profile kimi
 # or ensure the gateway patch is present too
 ./scripts/install.sh --with-gateway-patch
+./scripts/install.sh --profile kimi --with-gateway-patch
 # or apply just the gateway patch
 ./scripts/sessionvault-gateway-patch.sh --apply
 ```
 
 ### “Will this repo overwrite my history?”
 No. The repo versions plugin code only.
-The database stays in `~/.hermes/sessionvault/` and is not deleted by install scripts.
+The database stays under the target profile home (`~/.hermes/sessionvault/` or `~/.hermes/profiles/<name>/sessionvault/`) and is not deleted by install scripts.
 
 ## Development notes
 

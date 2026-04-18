@@ -1,54 +1,78 @@
 # Installing SessionVault
 
 This repo manages the **plugin code**.
-The conversation history lives separately in the profile DB and is preserved.
+The conversation history lives separately in a **profile-scoped** DB and is preserved.
 
-## Paths
+## Path model
+
+SessionVault now distinguishes between:
+
+- **shared Hermes runtime** — `~/.hermes/hermes-agent`
+- **target profile home** — either:
+  - default profile: `~/.hermes`
+  - named profile: `~/.hermes/profiles/<name>`
 
 Default paths in this environment:
 - repo: `~/projects/sessionvault`
-- Hermes runtime plugin destination: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
-- SessionVault data directory: `~/.hermes/sessionvault`
-- SQLite DB: `~/.hermes/sessionvault/vault.db`
+- shared runtime plugin destination: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
+- default profile data directory: `~/.hermes/sessionvault`
+- named profile data directory: `~/.hermes/profiles/<name>/sessionvault`
+- default profile DB: `~/.hermes/sessionvault/vault.db`
+- named profile DB: `~/.hermes/profiles/<name>/sessionvault/vault.db`
 
 ## Behaviour guarantees
 
 ### Existing DB
-If `~/.hermes/sessionvault/vault.db` already exists:
+If the target profile DB already exists:
 - installation reuses it
 - history is preserved
 - scripts do not remove it
 
 ### Fresh install with no DB
-If the DB does not exist:
+If the target profile DB does not exist:
 - installation still succeeds
 - the plugin creates the DB and schema automatically on first initialization
+
+### Idempotent shared-runtime handling
+The install flow now checks the shared runtime plugin first:
+- if runtime code already matches the repo, install **skips reinstall**
+- if runtime code differs, install re-aligns it from `plugin/`
+
+The gateway patch helper is also idempotent:
+- if already applied, it skips
+- if missing, it applies cleanly when possible
+- if the runtime has drifted, it exits with an explicit error
 
 ## Prerequisites
 
 - Hermes Agent already installed via the normal Hermes install flow
 - a valid Hermes runtime checkout at `~/.hermes/hermes-agent`
 - write access to that runtime
+- if using `--profile NAME`, the profile must already exist at `~/.hermes/profiles/NAME`
 
 ## Install from this repo
 
 From the repo root:
 
+### Default profile
 ```bash
+./scripts/install.sh
 ./scripts/install.sh --with-gateway-patch
 ```
 
-This will:
-- copy `plugin/` into `~/.hermes/hermes-agent/plugins/memory/sessionvault`
-- preserve any existing DB under `~/.hermes/sessionvault/`
-- create `~/.hermes/sessionvault/` if missing
-- apply the documented gateway lifecycle patch idempotently
-
-If you want to install only the plugin code and merely verify gateway patch status:
-
+### Named profile
 ```bash
-./scripts/install.sh
+./scripts/install.sh --profile kimi
+./scripts/install.sh --profile kimi --with-gateway-patch
 ```
+
+This will:
+- verify whether shared runtime plugin code is already aligned
+- skip reinstall if already aligned
+- otherwise copy `plugin/` into `~/.hermes/hermes-agent/plugins/memory/sessionvault`
+- prepare the target profile data dir under `<target-hermes-home>/sessionvault/`
+- preserve any existing DB for that target profile
+- optionally ensure the documented gateway lifecycle patch on the shared runtime
 
 ## Gateway lifecycle patch
 
@@ -62,14 +86,22 @@ Use the helper script to verify or apply it:
 ./scripts/sessionvault-gateway-patch.sh --apply
 ```
 
-The helper is idempotent:
-- exit `0` → patch already present (or just applied)
-- exit `1` → patch not applied yet
-- exit `2` → runtime drift detected; review `gateway/run.py` before forcing anything
+The helper is shared-runtime only; it does **not** target a specific profile.
+
+Exit codes:
+- `0` → patch already present (or just applied)
+- `1` → patch not applied yet
+- `2` → runtime drift detected; review `gateway/run.py` before forcing anything
 
 ## Activate the provider
 
-Ensure `~/.hermes/config.yaml` contains:
+Ensure the **target profile config** contains:
+
+### Default profile
+`~/.hermes/config.yaml`
+
+### Named profile
+`~/.hermes/profiles/<name>/config.yaml`
 
 ```yaml
 memory:
@@ -94,15 +126,21 @@ hermes sessionvault doctor
 
 ## Doctor
 
+### Default profile
 ```bash
 ./scripts/sessionvault-doctor.sh
 ```
 
+### Named profile
+```bash
+./scripts/sessionvault-doctor.sh --profile kimi
+```
+
 This checks:
 - repo plugin files
-- runtime plugin files
-- DB presence/counts
-- configured provider in `~/.hermes/config.yaml`
+- shared runtime plugin files
+- target profile DB presence/counts
+- configured provider in the target profile `config.yaml`
 - gateway lifecycle patch status (`applied` / `not applied` / `drift detected`)
 
 ## Notes

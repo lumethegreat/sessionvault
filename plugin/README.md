@@ -15,9 +15,10 @@ It stores every user/assistant turn **verbatim** in a profile-scoped SQLite data
 
 ## Activation
 
-Enable SessionVault by setting the external provider in:
+Enable SessionVault by setting the external provider in the active profile config:
 
-- `~/.hermes/config.yaml`
+- default profile: `~/.hermes/config.yaml`
+- named profile: `~/.hermes/profiles/<name>/config.yaml`
 
 ```yaml
 memory:
@@ -42,9 +43,10 @@ You should see `sessionvault  (local) ← active`.
 
 ## Where data is stored
 
-By default, SessionVault uses a **SQLite database** at:
+By default, SessionVault uses a **profile-scoped SQLite database** at:
 
-- `~/.hermes/sessionvault/vault.db`
+- default profile: `~/.hermes/sessionvault/vault.db`
+- named profile: `~/.hermes/profiles/<name>/sessionvault/vault.db`
 
 SQLite is configured with:
 
@@ -77,7 +79,7 @@ On session start, Hermes calls `initialize(session_id=..., platform=..., hermes_
 
 SessionVault:
 
-- Loads optional plugin config from `~/.hermes/sessionvault/config.json` (if present)
+- Loads optional plugin config from `<active-hermes-home>/sessionvault/config.json` (if present)
 - Opens/initializes the SQLite DB
 - Derives origin/scoping metadata (platform/chat_id/thread_id + best-effort workspace/channel)
 - Upserts a row in `sessions`
@@ -140,9 +142,11 @@ When the session has accumulated enough turns, the plugin schedules a job to sum
 
 SessionVault has **two** configuration layers:
 
-### A) Provider selection (global)
+### A) Provider selection (per active profile)
 
-In `~/.hermes/config.yaml`:
+In the active profile config:
+- default profile: `~/.hermes/config.yaml`
+- named profile: `~/.hermes/profiles/<name>/config.yaml`
 
 ```yaml
 memory:
@@ -155,7 +159,7 @@ This is how Hermes decides which external memory provider is active.
 
 Optional file:
 
-- `~/.hermes/sessionvault/config.json`
+- `<active-hermes-home>/sessionvault/config.json`
 
 Supported keys (current):
 
@@ -264,7 +268,7 @@ This is intentionally best-effort because Hermes gateways do not always provide 
 ### “SessionVault is installed but not active”
 
 - Run: `hermes memory status`
-- Ensure `~/.hermes/config.yaml` has `memory.provider: sessionvault`
+- Ensure the active profile config has `memory.provider: sessionvault`
 - Restart the gateway
 
 ### “I don’t see the `hermes sessionvault ...` command”
@@ -280,11 +284,11 @@ hermes sessionvault doctor
 ### Update safety
 
 If you run `hermes update`, local modifications inside `~/.hermes/hermes-agent/` may be overwritten.
-In this environment we mitigate this with:
+Treat this repo as the source of truth and re-align the shared runtime with:
 
-- `~/.hermes/scripts/backup-sessionvault.sh`
-- `~/.hermes/scripts/restore-sessionvault.sh`
-- `~/.hermes/scripts/sessionvault-doctor.sh`
+- `./scripts/install.sh`
+- `./scripts/install.sh --profile <name>`
+- `./scripts/sessionvault-doctor.sh [--profile <name>]`
 
 ---
 
