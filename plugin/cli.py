@@ -9,6 +9,7 @@ It registers a top-level command group:
   hermes sessionvault search "query" [--scope default|chat|workspace|global]
   hermes sessionvault events [--from <time>] [--to <time>] [--scope ...]
   hermes sessionvault timeline --from <time> [--to <time>] [--scope ...]
+  hermes sessionvault recent-decisions [--from <time>] [--to <time>] [--scope ...]
   hermes sessionvault lineage [session_id]
   hermes sessionvault doctor
 
@@ -70,6 +71,18 @@ def register_cli(parser) -> None:
         help="Timeline scope",
     )
     t.add_argument("--limit", type=int, default=25, help="Max results")
+
+    rd = sp.add_parser("recent-decisions", help="Extract recent decision-like turns")
+    rd.add_argument("--from", dest="from_time", help="Inclusive start of time window (epoch or ISO datetime)")
+    rd.add_argument("--to", dest="to_time", help="Inclusive end of time window (epoch or ISO datetime)")
+    rd.add_argument(
+        "--scope",
+        default="default",
+        choices=["default", "chat", "workspace", "global"],
+        help="Decision scope",
+    )
+    rd.add_argument("--limit", type=int, default=8, help="Max decisions to return")
+    rd.add_argument("--scan-limit", type=int, default=80, help="How many recent raw messages to scan before filtering")
 
     l = sp.add_parser("lineage", help="Show session lineage / continuity")
     l.add_argument("session_id", nargs="?", default="", help="Optional target session_id (defaults to current session)")
@@ -135,6 +148,15 @@ def _handle(args) -> None:
             "limit": args.limit,
         }
         print(prov.handle_tool_call("sessionvault_timeline", payload))
+    elif cmd == "recent-decisions":
+        payload = {
+            "from": args.from_time,
+            "to": args.to_time,
+            "scope": args.scope,
+            "limit": args.limit,
+            "scan_limit": args.scan_limit,
+        }
+        print(prov.handle_tool_call("sessionvault_recent_decisions", payload))
     elif cmd == "lineage":
         payload = {"session_id": args.session_id}
         print(prov.handle_tool_call("sessionvault_lineage", payload))

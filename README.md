@@ -10,7 +10,7 @@ It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - structured lifecycle events (`session_initialized`, `pre_compress`, `session_end`, ...)
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
-- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_status`, and `sessionvault_doctor`
+- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_recent_decisions`, `sessionvault_status`, and `sessionvault_doctor`
 
 ## Why it exists
 
@@ -164,6 +164,7 @@ hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
+hermes sessionvault recent-decisions --scope chat --limit 5
 hermes sessionvault lineage
 hermes sessionvault doctor
 ```
@@ -175,6 +176,7 @@ When active, SessionVault exposes these tools to the model:
 - `sessionvault_events`
 - `sessionvault_timeline`
 - `sessionvault_lineage`
+- `sessionvault_recent_decisions`
 - `sessionvault_status`
 - `sessionvault_doctor`
 
@@ -213,6 +215,11 @@ hermes sessionvault events --scope global --event-type pre_compress --limit 10
 ### Inspect continuity for the current session
 ```bash
 hermes sessionvault lineage
+```
+
+### Extract recent decisions
+```bash
+hermes sessionvault recent-decisions --scope chat --limit 5
 ```
 
 ### Ensure the gateway patch is present
