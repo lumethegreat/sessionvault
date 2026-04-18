@@ -47,7 +47,7 @@ Current runtime origin used for this extraction:
 - keeps search indices in SQLite FTS5
 - stores optional summaries in a separate table
 - exposes model tools for search/expand/timeline/status/doctor
-- supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, and `thread_id`
+- supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, `thread_id`, and `parent_chat_id`
 - tracks session continuity through `previous_session_id`, `split_from_session_id`, `split_reason`, and `resumed_from_session_id`
 - stores structured lifecycle events in an `events` table for operational forensics
 - preserves context snapshots before Hermes compression via `pre_compress_snapshot`
@@ -179,6 +179,7 @@ When active, SessionVault registers core retrieval/forensics commands:
 ```bash
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
+hermes sessionvault search "Trading Memphis" --parent-chat-id 1491809690848596240 --scope global
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
 hermes sessionvault lineage
@@ -230,6 +231,11 @@ hermes sessionvault search "session split" --scope chat --limit 5
 hermes sessionvault search "compression" --scope global --kind turn --role assistant
 ```
 
+### Search Discord topic sessions by parent channel
+```bash
+hermes sessionvault search "analise qualitativa" --scope global --parent-chat-id 1491809690848596240
+```
+
 ### Build a time-based timeline
 ```bash
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
@@ -271,6 +277,7 @@ hermes sessionvault doctor
 - If the target profile DB is absent, the plugin creates it on first use.
 - Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; reinstall from the repo to re-align them.
 - `scripts/install.sh` now skips reinstall when the shared runtime plugin is already aligned with the repo.
+- Discord thread/forum sessions can optionally persist `parent_chat_id` and `parent_chat_name` when the gateway origin supplies them.
 - Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
 - `scripts/sessionvault-gateway-patch.sh` can verify whether that patch is already present or apply it idempotently.
 - Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.

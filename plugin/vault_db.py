@@ -24,6 +24,8 @@ class OriginScope:
     chat_type: str = ""
     # Human names (best-effort)
     chat_name: str = ""
+    parent_chat_id: str = ""
+    parent_chat_name: str = ""
     user_id: str = ""
 
     # Derived / heuristic
@@ -134,6 +136,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   thread_id TEXT,
   chat_type TEXT,
   chat_name TEXT,
+  parent_chat_id TEXT,
+  parent_chat_name TEXT,
   user_id TEXT,
   workspace_name TEXT,
   channel_name TEXT,
@@ -227,6 +231,8 @@ class VaultDB:
 
     def _migrate_schema(self) -> None:
         required_session_columns = {
+            "parent_chat_id": "TEXT",
+            "parent_chat_name": "TEXT",
             "previous_session_id": "TEXT",
             "split_from_session_id": "TEXT",
             "split_reason": "TEXT",
@@ -250,6 +256,7 @@ class VaultDB:
                 )
                 """
             )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_parent_chat_updated ON sessions(platform, parent_chat_id, updated_at)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, created_at)")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type_time ON events(event_type, created_at)")
 
@@ -275,16 +282,19 @@ class VaultDB:
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO sessions(session_id, platform, chat_id, thread_id, chat_type, chat_name, user_id,
-                                     workspace_name, channel_name, previous_session_id, split_from_session_id,
-                                     split_reason, resumed_from_session_id, suspended_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO sessions(session_id, platform, chat_id, thread_id, chat_type, chat_name, parent_chat_id,
+                                     parent_chat_name, user_id, workspace_name, channel_name, previous_session_id,
+                                     split_from_session_id, split_reason, resumed_from_session_id, suspended_at,
+                                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                   platform=excluded.platform,
                   chat_id=excluded.chat_id,
                   thread_id=excluded.thread_id,
                   chat_type=excluded.chat_type,
                   chat_name=excluded.chat_name,
+                  parent_chat_id=excluded.parent_chat_id,
+                  parent_chat_name=excluded.parent_chat_name,
                   user_id=excluded.user_id,
                   workspace_name=excluded.workspace_name,
                   channel_name=excluded.channel_name,
@@ -302,6 +312,8 @@ class VaultDB:
                     origin.thread_id,
                     origin.chat_type,
                     origin.chat_name,
+                    origin.parent_chat_id,
+                    origin.parent_chat_name,
                     origin.user_id,
                     origin.workspace_name,
                     origin.channel_name,
@@ -546,6 +558,7 @@ class VaultDB:
         platform: str = "",
         chat_id: str = "",
         thread_id: str = "",
+        parent_chat_id: str = "",
     ) -> Dict[str, List[Dict[str, Any]]]:
         """FTS search across messages + summaries.
 
@@ -584,6 +597,9 @@ class VaultDB:
         if thread_id:
             session_where.append("thread_id=?")
             params.append(thread_id)
+        if parent_chat_id:
+            session_where.append("parent_chat_id=?")
+            params.append(parent_chat_id)
 
         with self._lock:
             if session_where:
@@ -762,9 +778,10 @@ class VaultDB:
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT session_id, platform, chat_id, thread_id, chat_type, chat_name, user_id,
-                       workspace_name, channel_name, previous_session_id, split_from_session_id,
-                       split_reason, resumed_from_session_id, suspended_at, created_at, updated_at
+                SELECT session_id, platform, chat_id, thread_id, chat_type, chat_name, parent_chat_id,
+                       parent_chat_name, user_id, workspace_name, channel_name, previous_session_id,
+                       split_from_session_id, split_reason, resumed_from_session_id, suspended_at,
+                       created_at, updated_at
                 FROM sessions WHERE session_id=?
                 """,
                 (session_id,),
@@ -772,9 +789,10 @@ class VaultDB:
         if not row:
             return {}
         keys = [
-            "session_id", "platform", "chat_id", "thread_id", "chat_type", "chat_name", "user_id",
-            "workspace_name", "channel_name", "previous_session_id", "split_from_session_id",
-            "split_reason", "resumed_from_session_id", "suspended_at", "created_at", "updated_at"
+            "session_id", "platform", "chat_id", "thread_id", "chat_type", "chat_name", "parent_chat_id",
+            "parent_chat_name", "user_id", "workspace_name", "channel_name", "previous_session_id",
+            "split_from_session_id", "split_reason", "resumed_from_session_id", "suspended_at", "created_at",
+            "updated_at"
         ]
         return {k: row[i] for i, k in enumerate(keys)}
 
@@ -857,6 +875,8 @@ def load_origin_from_sessions_index(hermes_home: str, session_id: str) -> Origin
         thread_id = str(origin.get("thread_id") or "") if origin.get("thread_id") else ""
         chat_type = str(origin.get("chat_type") or entry.get("chat_type") or "")
         chat_name = str(origin.get("chat_name") or entry.get("display_name") or entry.get("display_name") or "")
+        parent_chat_id = str(origin.get("parent_chat_id") or "")
+        parent_chat_name = str(origin.get("parent_chat_name") or "")
         user_id = str(origin.get("user_id") or "")
 
         ws, ch = parse_workspace_channel(platform, chat_name)
@@ -866,6 +886,8 @@ def load_origin_from_sessions_index(hermes_home: str, session_id: str) -> Origin
             thread_id=thread_id,
             chat_type=chat_type,
             chat_name=chat_name,
+            parent_chat_id=parent_chat_id,
+            parent_chat_name=parent_chat_name,
             user_id=user_id,
             workspace_name=ws,
             channel_name=ch,

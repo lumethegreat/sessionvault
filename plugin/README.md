@@ -81,7 +81,7 @@ SessionVault:
 
 - Loads optional plugin config from `<active-hermes-home>/sessionvault/config.json` (if present)
 - Opens/initializes the SQLite DB
-- Derives origin/scoping metadata (platform/chat_id/thread_id + best-effort workspace/channel)
+- Derives origin/scoping metadata (platform/chat_id/thread_id + optional parent channel metadata + best-effort workspace/channel)
 - Upserts a row in `sessions`
 - Starts a small background worker thread
 
@@ -201,6 +201,7 @@ When `memory.provider == sessionvault`, Hermes registers the core retrieval/fore
 ```bash
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
+hermes sessionvault search "Trading Memphis" --parent-chat-id 1491809690848596240 --scope global
 hermes sessionvault events --scope global --limit 20
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00"
 hermes sessionvault lineage
@@ -254,10 +255,13 @@ SessionVault stores and filters by:
 - `platform`
 - `chat_id`
 - `thread_id`
+- optional `parent_chat_id` / `parent_chat_name` for Discord thread/forum sessions
 - derived `workspace_name` and `channel_name`
 
 **Default search scope** tries to restrict results to the same workspace+chat when it can parse it from `chat_name`.
 If parsing fails, it falls back to a stable `chat_key = "<platform>:<chat_id>"`.
+
+For Discord thread/forum workflows, `parent_chat_id` can be used to query across many topic sessions under the same parent channel, but only when the gateway origin payload includes that metadata.
 
 This is intentionally best-effort because Hermes gateways do not always provide a stable workspace identifier (e.g. Discord guild_id) to plugins.
 

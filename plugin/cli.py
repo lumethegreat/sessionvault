@@ -49,6 +49,7 @@ def register_cli(parser) -> None:
     s.add_argument("--platform", default="", help="Filter platform")
     s.add_argument("--chat-id", default="", help="Filter chat_id")
     s.add_argument("--thread-id", default="", help="Filter thread_id")
+    s.add_argument("--parent-chat-id", default="", help="Filter parent_chat_id")
 
     e = sp.add_parser("events", help="List structured lifecycle events")
     e.add_argument("--from", dest="from_time", help="Inclusive start of time window (epoch or ISO datetime)")
@@ -142,6 +143,7 @@ def _handle(args) -> None:
             "platform": args.platform,
             "chat_id": args.chat_id,
             "thread_id": args.thread_id,
+            "parent_chat_id": args.parent_chat_id,
         }
         print(prov.handle_tool_call("sessionvault_search", payload))
     elif cmd == "events":

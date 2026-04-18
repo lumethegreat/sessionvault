@@ -64,6 +64,10 @@ SEARCH_SCHEMA = {
             "platform": {"type": "string", "description": "Optional platform filter."},
             "chat_id": {"type": "string", "description": "Optional chat_id filter."},
             "thread_id": {"type": "string", "description": "Optional thread_id filter."},
+            "parent_chat_id": {
+                "type": "string",
+                "description": "Optional parent channel ID filter (useful for Discord threads/forum topics).",
+            },
         },
         "required": ["query"],
     },
@@ -659,6 +663,8 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 "platform": self._origin.platform,
                 "chat_id": self._origin.chat_id,
                 "thread_id": self._origin.thread_id,
+                "parent_chat_id": self._origin.parent_chat_id,
+                "parent_chat_name": self._origin.parent_chat_name,
                 "workspace_name": self._origin.workspace_name,
                 "channel_name": self._origin.channel_name,
                 "chat_name": self._origin.chat_name,
@@ -911,6 +917,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
         platform = str(args.get("platform") or "").strip()
         chat_id = str(args.get("chat_id") or "").strip()
         thread_id = str(args.get("thread_id") or "").strip()
+        parent_chat_id = str(args.get("parent_chat_id") or "").strip()
 
         ws, ch, chat_key = self._resolve_scope_filters(scope)
 
@@ -928,6 +935,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
             platform=platform,
             chat_id=chat_id,
             thread_id=thread_id,
+            parent_chat_id=parent_chat_id,
         )
         return json.dumps({
             "query": query,
@@ -942,6 +950,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 "platform": platform,
                 "chat_id": chat_id,
                 "thread_id": thread_id,
+                "parent_chat_id": parent_chat_id,
             },
             "hits": hits,
         }, ensure_ascii=False)
