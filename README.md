@@ -58,6 +58,7 @@ Current runtime origin used for this extraction:
 - `scripts/sync-from-runtime.sh` — refresh this repo from current runtime plugin
 - `scripts/sync-to-runtime.sh` — push repo plugin code into Hermes runtime
 - `scripts/sessionvault-doctor.sh` — inspect repo/runtime/data status
+- `references/hermes-gateway-run-sessionvault-events.patch` — local gateway patch that records gateway/session-control events into SessionVault
 - `INSTALL.md` — installation and upgrade instructions
 
 ## Architecture
@@ -219,6 +220,7 @@ hermes sessionvault doctor
 - The SQLite DB in `~/.hermes/sessionvault/` is preserved.
 - If the DB is absent, the plugin creates it on first use.
 - Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; use the sync scripts to reconcile.
+- Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
 - Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.
 
 ## Troubleshooting

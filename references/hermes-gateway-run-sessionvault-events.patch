@@ -1,0 +1,122 @@
+diff --git a/gateway/run.py b/gateway/run.py
+index ba7ea43a..5eb6581f 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -2970,6 +2970,17 @@ class GatewayRunner:
+                     # Force-clean the sentinel so the session is unlocked.
+                     if _quick_key in self._running_agents:
+                         del self._running_agents[_quick_key]
++                    try:
++                        _session_entry = self.session_store.get_or_create_session(source)
++                        from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++                        _sv_record_gateway_event(
++                            str(_hermes_home),
++                            _session_entry.session_id,
++                            "session_stop",
++                            {"mode": "hard-stop-pending", "session_key": _quick_key},
++                        )
++                    except Exception:
++                        pass
+                     logger.info("HARD STOP (pending) for session %s — sentinel cleared", _quick_key[:20])
+                     return "⚡ Force-stopped. The agent was still starting — session unlocked."
+                 # Queue the message so it will be picked up after the
+@@ -4386,6 +4397,21 @@ class GatewayRunner:
+         except Exception:
+             pass
+ 
++        try:
++            from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++            _sv_record_gateway_event(
++                str(_hermes_home),
++                old_entry.session_id if old_entry else "",
++                "session_reset",
++                {
++                    "new_session_id": new_entry.session_id if new_entry else None,
++                    "platform": source.platform.value if source.platform else "",
++                    "session_key": session_key,
++                },
++            )
++        except Exception:
++            pass
++
+         # Emit session:end hook (session is ending)
+         await self.hooks.emit("session:end", {
+             "platform": source.platform.value if source.platform else "",
+@@ -4504,6 +4530,16 @@ class GatewayRunner:
+             # Force-clean the sentinel so the session is unlocked.
+             if session_key in self._running_agents:
+                 del self._running_agents[session_key]
++            try:
++                from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++                _sv_record_gateway_event(
++                    str(_hermes_home),
++                    session_entry.session_id,
++                    "session_stop",
++                    {"mode": "pending", "session_key": session_key},
++                )
++            except Exception:
++                pass
+             logger.info("STOP (pending) for session %s — sentinel cleared", session_key[:20])
+             return "⚡ Stopped. The agent hadn't started yet — you can continue this session."
+         if agent:
+@@ -4512,6 +4548,16 @@ class GatewayRunner:
+             # keep it locked forever.
+             if session_key in self._running_agents:
+                 del self._running_agents[session_key]
++            try:
++                from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++                _sv_record_gateway_event(
++                    str(_hermes_home),
++                    session_entry.session_id,
++                    "session_stop",
++                    {"mode": "running", "session_key": session_key},
++                )
++            except Exception:
++                pass
+             return "⚡ Stopped. You can continue this session."
+         else:
+             return "No active task to stop."
+@@ -4541,6 +4587,22 @@ class GatewayRunner:
+             logger.debug("Failed to write restart notify file: %s", e)
+ 
+         active_agents = self._running_agent_count()
++        try:
++            session_entry = self.session_store.get_or_create_session(event.source)
++            from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++            _sv_record_gateway_event(
++                str(_hermes_home),
++                session_entry.session_id,
++                "gateway_restart_requested",
++                {
++                    "platform": event.source.platform.value if event.source.platform else "",
++                    "chat_id": event.source.chat_id,
++                    "thread_id": event.source.thread_id,
++                    "active_agents": active_agents,
++                },
++            )
++        except Exception:
++            pass
+         # When running under a service manager (systemd/launchd), use the
+         # service restart path: exit with code 75 so the service manager
+         # restarts us.  The detached subprocess approach (setsid + bash)
+@@ -8976,6 +9038,20 @@ class GatewayRunner:
+                     "Session split detected: %s → %s (compression)",
+                     session_id, agent.session_id,
+                 )
++                try:
++                    from plugins.memory.sessionvault.vault_db import record_gateway_event as _sv_record_gateway_event
++                    _sv_record_gateway_event(
++                        str(_hermes_home),
++                        session_id,
++                        "session_split",
++                        {
++                            "new_session_id": agent.session_id,
++                            "reason": "compression",
++                            "session_key": session_key,
++                        },
++                    )
++                except Exception:
++                    pass
+                 entry = self.session_store._entries.get(session_key)
+                 if entry:
+                     entry.session_id = agent.session_id

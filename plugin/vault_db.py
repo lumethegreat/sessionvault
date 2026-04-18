@@ -828,3 +828,36 @@ def load_origin_from_sessions_index(hermes_home: str, session_id: str) -> Origin
         )
 
     return OriginScope(platform="", chat_id="")
+
+
+def resolve_sessionvault_db_path(hermes_home: str) -> str:
+    cfg_path = Path(hermes_home) / "sessionvault" / "config.json"
+    default_path = Path(hermes_home) / "sessionvault" / "vault.db"
+    if not cfg_path.exists():
+        return str(default_path)
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return str(default_path)
+    db_path = str(cfg.get("db_path") or "").strip()
+    if not db_path:
+        return str(default_path)
+    return db_path.replace("$HERMES_HOME", str(hermes_home))
+
+
+def record_gateway_event(hermes_home: str, session_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> bool:
+    if not hermes_home or not session_id or not event_type:
+        return False
+    db = None
+    try:
+        db = VaultDB(resolve_sessionvault_db_path(hermes_home))
+        db.insert_event(session_id, event_type, payload or {})
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            if db:
+                db.close()
+        except Exception:
+            pass

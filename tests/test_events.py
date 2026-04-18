@@ -85,3 +85,25 @@ def test_provider_records_and_returns_lifecycle_events(tmp_path):
     assert "pre_compress" in event_types
     assert "session_end" in event_types
     provider.shutdown()
+
+
+def test_record_gateway_event_helper_writes_to_vault(tmp_path):
+    module = load_module("sessionvault_vault_db_event_helper", "vault_db.py")
+    hermes_home = tmp_path
+    db_path = hermes_home / "sessionvault" / "vault.db"
+    db = module.VaultDB(str(db_path))
+    try:
+        origin = module.OriginScope(platform="discord", chat_id="chat-1", thread_id="thread-1", workspace_name="ws", channel_name="#general")
+        db.upsert_session("s1", origin)
+    finally:
+        db.close()
+
+    written = module.record_gateway_event(str(hermes_home), "s1", "session_split", {"new_session_id": "s2"})
+    assert written is True
+
+    db2 = module.VaultDB(str(db_path))
+    try:
+        events = db2.get_events(session_ids=["s1"], limit=10)
+    finally:
+        db2.close()
+    assert any(event["event_type"] == "session_split" for event in events)
