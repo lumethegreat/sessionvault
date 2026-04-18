@@ -54,7 +54,8 @@ Current runtime origin used for this extraction:
 ## Repository layout
 
 - `plugin/` — the plugin code installed into Hermes runtime
-- `scripts/install.sh` — install plugin code into Hermes runtime without touching the DB
+- `scripts/install.sh` — install plugin code into Hermes runtime and verify gateway patch status
+- `scripts/sessionvault-gateway-patch.sh` — apply/check the local gateway lifecycle patch idempotently
 - `scripts/sync-from-runtime.sh` — refresh this repo from current runtime plugin
 - `scripts/sync-to-runtime.sh` — push repo plugin code into Hermes runtime
 - `scripts/sessionvault-doctor.sh` — inspect repo/runtime/data status
@@ -112,6 +113,12 @@ Rules:
 From the repo root:
 
 ```bash
+./scripts/install.sh --with-gateway-patch
+```
+
+If you only want to install plugin code and verify patch status without modifying `gateway/run.py`:
+
+```bash
 ./scripts/install.sh
 ```
 
@@ -142,10 +149,10 @@ hermes sessionvault doctor
 ## Typical workflow
 
 1. Edit code in this repo.
-2. Run `scripts/install.sh`.
+2. Run `scripts/install.sh --with-gateway-patch` when you want to keep the runtime patch in sync.
 3. Restart Hermes gateway or CLI.
-4. Verify with `hermes memory status` and `hermes sessionvault status`.
-5. Use `scripts/sessionvault-doctor.sh` if repo/runtime/data drift is suspected.
+4. Verify with `hermes memory status`, `hermes sessionvault status`, and `./scripts/sessionvault-doctor.sh`.
+5. Use `./scripts/sessionvault-gateway-patch.sh --check` if gateway/runtime drift is suspected.
 
 ## CLI and tool usage
 
@@ -208,6 +215,12 @@ hermes sessionvault events --scope global --event-type pre_compress --limit 10
 hermes sessionvault lineage
 ```
 
+### Ensure the gateway patch is present
+```bash
+./scripts/sessionvault-gateway-patch.sh --check
+./scripts/sessionvault-gateway-patch.sh --apply
+```
+
 ### Run health checks
 ```bash
 hermes sessionvault doctor
@@ -216,11 +229,12 @@ hermes sessionvault doctor
 
 ## Safety and operational notes
 
-- The install flow only copies plugin code.
+- The install flow only copies plugin code unless you opt into `--with-gateway-patch`.
 - The SQLite DB in `~/.hermes/sessionvault/` is preserved.
 - If the DB is absent, the plugin creates it on first use.
 - Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; use the sync scripts to reconcile.
 - Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
+- `scripts/sessionvault-gateway-patch.sh` can verify whether that patch is already present or apply it idempotently.
 - Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.
 
 ## Troubleshooting
@@ -240,6 +254,7 @@ Run:
 
 ```bash
 ./scripts/sessionvault-doctor.sh
+./scripts/sessionvault-gateway-patch.sh --check
 ```
 
 Then, depending on the direction you want:
@@ -248,6 +263,8 @@ Then, depending on the direction you want:
 ./scripts/sync-from-runtime.sh
 # or
 ./scripts/sync-to-runtime.sh
+# or ensure the gateway patch is present
+./scripts/sessionvault-gateway-patch.sh --apply
 ```
 
 ### “Will this repo overwrite my history?”

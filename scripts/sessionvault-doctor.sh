@@ -9,6 +9,7 @@ RUNTIME_PLUGIN="$PROJECT_ROOT/plugins/memory/sessionvault"
 BACKUP_PLUGIN="$HERMES_HOME/local-plugins/sessionvault"
 CONFIG_YAML="$HERMES_HOME/config.yaml"
 VAULT_DB="$HERMES_HOME/sessionvault/vault.db"
+GATEWAY_PATCH_SCRIPT="$REPO_ROOT/scripts/sessionvault-gateway-patch.sh"
 
 hash_listing() {
   local dir="$1"
@@ -76,6 +77,31 @@ else
 fi
 
 echo
+if [[ -x "$GATEWAY_PATCH_SCRIPT" ]]; then
+  set +e
+  "$GATEWAY_PATCH_SCRIPT" --check --hermes-home "$HERMES_HOME"
+  patch_status=$?
+  set -e
+  case "$patch_status" in
+    0)
+      echo "✓ Gateway lifecycle patch status: applied"
+      ;;
+    1)
+      echo "ℹ Gateway lifecycle patch status: not applied"
+      echo "  Apply with: ./scripts/sessionvault-gateway-patch.sh --apply"
+      ;;
+    2)
+      echo "✗ Gateway lifecycle patch status: runtime drift detected"
+      ;;
+    *)
+      echo "✗ Gateway lifecycle patch check failed with exit code: $patch_status"
+      ;;
+  esac
+else
+  echo "✗ Gateway patch helper missing or not executable: $GATEWAY_PATCH_SCRIPT"
+fi
+
+echo
 if [[ -d "$REPO_PLUGIN" && -d "$RUNTIME_PLUGIN" ]]; then
   TMP1="/tmp/.sessionvault_repo.sha"
   TMP2="/tmp/.sessionvault_runtime.sha"
@@ -85,3 +111,4 @@ if [[ -d "$REPO_PLUGIN" && -d "$RUNTIME_PLUGIN" ]]; then
   diff -u "$TMP1" "$TMP2" || true
   rm -f "$TMP1" "$TMP2"
 fi
+

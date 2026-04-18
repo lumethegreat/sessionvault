@@ -35,7 +35,7 @@ If the DB does not exist:
 From the repo root:
 
 ```bash
-./scripts/install.sh
+./scripts/install.sh --with-gateway-patch
 ```
 
 This will:
@@ -43,6 +43,30 @@ This will:
 - refresh the backup copy in `~/.hermes/local-plugins/sessionvault`
 - preserve any existing DB under `~/.hermes/sessionvault/`
 - create `~/.hermes/sessionvault/` if missing
+- apply the documented gateway lifecycle patch idempotently
+
+If you want to install only the plugin code and merely verify gateway patch status:
+
+```bash
+./scripts/install.sh
+```
+
+## Gateway lifecycle patch
+
+The deeper gateway/session-control event integration lives in:
+- `references/hermes-gateway-run-sessionvault-events.patch`
+
+Use the helper script to verify or apply it:
+
+```bash
+./scripts/sessionvault-gateway-patch.sh --check
+./scripts/sessionvault-gateway-patch.sh --apply
+```
+
+The helper is idempotent:
+- exit `0` → patch already present (or just applied)
+- exit `1` → patch not applied yet
+- exit `2` → runtime drift detected; review `gateway/run.py` before forcing anything
 
 ## Activate the provider
 
@@ -98,6 +122,7 @@ This checks:
 - backup plugin files
 - DB presence/counts
 - configured provider in `~/.hermes/config.yaml`
+- gateway lifecycle patch status (`applied` / `not applied` / `drift detected`)
 
 ## Notes
 
