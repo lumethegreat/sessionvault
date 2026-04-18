@@ -122,6 +122,18 @@ TIMELINE_SCHEMA = {
     },
 }
 
+LINEAGE_SCHEMA = {
+    "name": "sessionvault_lineage",
+    "description": "Show lineage/continuity metadata for a SessionVault session.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_id": {"type": "string", "description": "Optional target session_id. Defaults to current session."},
+        },
+        "required": [],
+    },
+}
+
 
 @dataclass
 class _Config:
@@ -256,6 +268,13 @@ class SessionVaultMemoryProvider(MemoryProvider):
         self._cfg = _load_config(self._hermes_home) if self._hermes_home else _default_config(".")
         self._db = VaultDB(self._cfg.db_path)
 
+        explicit_previous_session_id = str(kwargs.get("previous_session_id") or "").strip()
+        split_from_session_id = str(kwargs.get("split_from_session_id") or "").strip()
+        split_reason = str(kwargs.get("split_reason") or "").strip()
+        resumed_from_session_id = str(kwargs.get("resumed_from_session_id") or "").strip()
+        suspended_at_raw = kwargs.get("suspended_at")
+        suspended_at = int(suspended_at_raw) if suspended_at_raw not in (None, "") else None
+
         # Derive origin / scope metadata
         if self._platform == "cli":
             self._origin = OriginScope(
@@ -279,7 +298,22 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 self._origin.workspace_name = self._origin.workspace_name or self._origin.scope_chat_key()
                 self._origin.channel_name = self._origin.channel_name or (self._origin.chat_name or self._origin.chat_id or "")
 
-        self._db.upsert_session(self._session_id, self._origin)
+        inferred_previous_session_id = ""
+        if self._db and not explicit_previous_session_id:
+            try:
+                inferred_previous_session_id = self._db.infer_previous_session_id(self._origin, self._session_id)
+            except Exception:
+                inferred_previous_session_id = ""
+
+        self._db.upsert_session(
+            self._session_id,
+            self._origin,
+            previous_session_id=explicit_previous_session_id or inferred_previous_session_id,
+            split_from_session_id=split_from_session_id,
+            split_reason=split_reason,
+            resumed_from_session_id=resumed_from_session_id,
+            suspended_at=suspended_at,
+        )
         self._ensure_worker()
 
     def _ensure_worker(self) -> None:
@@ -476,7 +510,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
     # -- Tooling ---------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, TIMELINE_SCHEMA]
+        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, TIMELINE_SCHEMA, LINEAGE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         try:
@@ -490,6 +524,8 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 return self._tool_doctor()
             if tool_name == "sessionvault_timeline":
                 return self._tool_timeline(args)
+            if tool_name == "sessionvault_lineage":
+                return self._tool_lineage(args)
         except Exception as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -525,6 +561,17 @@ class SessionVaultMemoryProvider(MemoryProvider):
         if not self._db:
             return json.dumps({"error": "not initialized"})
         return json.dumps(self._db.doctor(), ensure_ascii=False)
+
+    def _tool_lineage(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        session_id = str(args.get("session_id") or self._session_id).strip()
+        if not session_id:
+            return json.dumps({"error": "session_id is required"})
+        lineage = self._db.get_lineage(session_id)
+        if not lineage:
+            return json.dumps({"error": f"session not found: {session_id}"}, ensure_ascii=False)
+        return json.dumps(lineage, ensure_ascii=False)
 
     def _resolve_scope_filters(self, scope: str) -> Tuple[str, str, str]:
         ws = self._origin.workspace_name

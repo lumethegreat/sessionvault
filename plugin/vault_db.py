@@ -137,6 +137,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT,
   workspace_name TEXT,
   channel_name TEXT,
+  previous_session_id TEXT,
+  split_from_session_id TEXT,
+  split_reason TEXT,
+  resumed_from_session_id TEXT,
+  suspended_at INTEGER,
   created_at INTEGER,
   updated_at INTEGER
 );
@@ -207,6 +212,21 @@ class VaultDB:
         self._conn = _connect(db_path)
         self._lock = threading.RLock()
         self._conn.executescript(SCHEMA_SQL)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        required_session_columns = {
+            "previous_session_id": "TEXT",
+            "split_from_session_id": "TEXT",
+            "split_reason": "TEXT",
+            "resumed_from_session_id": "TEXT",
+            "suspended_at": "INTEGER",
+        }
+        with self._lock:
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            for column, coltype in required_session_columns.items():
+                if column not in existing:
+                    self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {coltype}")
 
     def close(self) -> None:
         with self._lock:
@@ -215,14 +235,25 @@ class VaultDB:
             except Exception:
                 pass
 
-    def upsert_session(self, session_id: str, origin: OriginScope) -> None:
+    def upsert_session(
+        self,
+        session_id: str,
+        origin: OriginScope,
+        *,
+        previous_session_id: str = "",
+        split_from_session_id: str = "",
+        split_reason: str = "",
+        resumed_from_session_id: str = "",
+        suspended_at: Optional[int] = None,
+    ) -> None:
         now = int(time.time())
         with self._lock:
             self._conn.execute(
                 """
                 INSERT INTO sessions(session_id, platform, chat_id, thread_id, chat_type, chat_name, user_id,
-                                     workspace_name, channel_name, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     workspace_name, channel_name, previous_session_id, split_from_session_id,
+                                     split_reason, resumed_from_session_id, suspended_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                   platform=excluded.platform,
                   chat_id=excluded.chat_id,
@@ -232,6 +263,11 @@ class VaultDB:
                   user_id=excluded.user_id,
                   workspace_name=excluded.workspace_name,
                   channel_name=excluded.channel_name,
+                  previous_session_id=CASE WHEN excluded.previous_session_id != '' THEN excluded.previous_session_id ELSE sessions.previous_session_id END,
+                  split_from_session_id=CASE WHEN excluded.split_from_session_id != '' THEN excluded.split_from_session_id ELSE sessions.split_from_session_id END,
+                  split_reason=CASE WHEN excluded.split_reason != '' THEN excluded.split_reason ELSE sessions.split_reason END,
+                  resumed_from_session_id=CASE WHEN excluded.resumed_from_session_id != '' THEN excluded.resumed_from_session_id ELSE sessions.resumed_from_session_id END,
+                  suspended_at=COALESCE(excluded.suspended_at, sessions.suspended_at),
                   updated_at=excluded.updated_at
                 """,
                 (
@@ -244,6 +280,11 @@ class VaultDB:
                     origin.user_id,
                     origin.workspace_name,
                     origin.channel_name,
+                    previous_session_id,
+                    split_from_session_id,
+                    split_reason,
+                    resumed_from_session_id,
+                    suspended_at,
                     now,
                     now,
                 ),
@@ -498,12 +539,97 @@ class VaultDB:
 
         return {"summaries": out_summaries, "messages": out_messages}
 
+    def infer_previous_session_id(self, origin: OriginScope, current_session_id: str) -> str:
+        where = ["session_id != ?"]
+        params: List[Any] = [current_session_id]
+        if origin.platform:
+            where.append("platform=?")
+            params.append(origin.platform)
+        if origin.chat_id:
+            where.append("chat_id=?")
+            params.append(origin.chat_id)
+        if origin.thread_id:
+            where.append("thread_id=?")
+            params.append(origin.thread_id)
+        sql = "SELECT session_id FROM sessions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY updated_at DESC LIMIT 1"
+        with self._lock:
+            row = self._conn.execute(sql, tuple(params)).fetchone()
+        return str(row[0]) if row and row[0] else ""
+
+    def get_lineage(self, session_id: str) -> Dict[str, Any]:
+        current = self.get_session_meta(session_id)
+        if not current:
+            return {}
+
+        ancestors: List[Dict[str, Any]] = []
+        seen = {session_id}
+        cursor = current
+        while cursor:
+            next_session_id = ""
+            relation = ""
+            reason = cursor.get("split_reason") or ""
+            if cursor.get("resumed_from_session_id"):
+                next_session_id = str(cursor.get("resumed_from_session_id") or "")
+                relation = "resumed_from"
+            elif cursor.get("split_from_session_id"):
+                next_session_id = str(cursor.get("split_from_session_id") or "")
+                relation = "split_from"
+            elif cursor.get("previous_session_id"):
+                next_session_id = str(cursor.get("previous_session_id") or "")
+                relation = "previous"
+            if not next_session_id or next_session_id in seen:
+                break
+            parent = self.get_session_meta(next_session_id)
+            if not parent:
+                break
+            ancestors.append({
+                "session_id": next_session_id,
+                "relation": relation,
+                "reason": reason,
+                "created_at": parent.get("created_at"),
+                "updated_at": parent.get("updated_at"),
+            })
+            seen.add(next_session_id)
+            cursor = parent
+
+        descendants: List[Dict[str, Any]] = []
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT session_id, previous_session_id, split_from_session_id, resumed_from_session_id, split_reason, created_at, updated_at
+                FROM sessions
+                WHERE previous_session_id=? OR split_from_session_id=? OR resumed_from_session_id=?
+                ORDER BY created_at ASC, updated_at ASC
+                """,
+                (session_id, session_id, session_id),
+            ).fetchall()
+        for sid, prev_sid, split_sid, resumed_sid, split_reason, created_at, updated_at in rows:
+            relation = "previous" if prev_sid == session_id else "split_from" if split_sid == session_id else "resumed_from"
+            descendants.append({
+                "session_id": sid,
+                "relation": relation,
+                "reason": split_reason or "",
+                "created_at": created_at,
+                "updated_at": updated_at,
+            })
+
+        return {
+            "session_id": session_id,
+            "session": current,
+            "ancestors": ancestors,
+            "descendants": descendants,
+        }
+
     def get_session_meta(self, session_id: str) -> Dict[str, Any]:
         with self._lock:
             row = self._conn.execute(
                 """
                 SELECT session_id, platform, chat_id, thread_id, chat_type, chat_name, user_id,
-                       workspace_name, channel_name, created_at, updated_at
+                       workspace_name, channel_name, previous_session_id, split_from_session_id,
+                       split_reason, resumed_from_session_id, suspended_at, created_at, updated_at
                 FROM sessions WHERE session_id=?
                 """,
                 (session_id,),
@@ -512,7 +638,8 @@ class VaultDB:
             return {}
         keys = [
             "session_id", "platform", "chat_id", "thread_id", "chat_type", "chat_name", "user_id",
-            "workspace_name", "channel_name", "created_at", "updated_at"
+            "workspace_name", "channel_name", "previous_session_id", "split_from_session_id",
+            "split_reason", "resumed_from_session_id", "suspended_at", "created_at", "updated_at"
         ]
         return {k: row[i] for i, k in enumerate(keys)}
 

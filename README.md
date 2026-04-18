@@ -6,9 +6,10 @@ It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - cross-session search via SQLite FTS5
 - time-range recall by `created_at`
 - structured search filters for `kind`, `role`, and session metadata
+- session lineage / continuity metadata across related sessions
 - scoped recall by chat/workspace when available
 - optional incremental summaries stored alongside raw messages
-- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_status`, and `sessionvault_doctor`
+- model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_status`, and `sessionvault_doctor`
 
 ## Why it exists
 
@@ -38,6 +39,7 @@ Current runtime origin used for this extraction:
 - stores optional summaries in a separate table
 - exposes model tools for search/expand/timeline/status/doctor
 - supports structured search filters for `kind`, `role`, `session_id`, `platform`, `chat_id`, and `thread_id`
+- tracks session continuity through `previous_session_id`, `split_from_session_id`, `split_reason`, and `resumed_from_session_id`
 - preserves context snapshots before Hermes compression via `pre_compress_snapshot`
 - scopes recall by chat/workspace when possible
 
@@ -151,6 +153,7 @@ When active, SessionVault registers:
 hermes sessionvault status
 hermes sessionvault search "query" --scope default --limit 8
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
+hermes sessionvault lineage
 hermes sessionvault doctor
 ```
 
@@ -159,6 +162,7 @@ When active, SessionVault exposes these tools to the model:
 - `sessionvault_search`
 - `sessionvault_expand`
 - `sessionvault_timeline`
+- `sessionvault_lineage`
 - `sessionvault_status`
 - `sessionvault_doctor`
 
@@ -187,6 +191,11 @@ hermes sessionvault search "compression" --scope global --kind turn --role assis
 ### Build a time-based timeline
 ```bash
 hermes sessionvault timeline --from "2026-04-13 08:05:00" --to "2026-04-13 08:10:00" --scope chat
+```
+
+### Inspect continuity for the current session
+```bash
+hermes sessionvault lineage
 ```
 
 ### Run health checks
@@ -249,9 +258,9 @@ So this repo should be treated as:
 ## Roadmap
 
 Near-term priorities:
-- session lineage / split tracking
 - higher-level workflow tools such as recent decisions and plan recovery
 - richer temporal/structured recall on top of the new timeline + filter foundations
+- deeper lifecycle capture for explicit suspend/restart/compression event modeling
 
 ## Related docs
 

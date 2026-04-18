@@ -8,6 +8,7 @@ It registers a top-level command group:
   hermes sessionvault status
   hermes sessionvault search "query" [--scope default|chat|workspace|global]
   hermes sessionvault timeline --from <time> [--to <time>] [--scope ...]
+  hermes sessionvault lineage [session_id]
   hermes sessionvault doctor
 
 Implementation detail:
@@ -56,6 +57,9 @@ def register_cli(parser) -> None:
         help="Timeline scope",
     )
     t.add_argument("--limit", type=int, default=25, help="Max results")
+
+    l = sp.add_parser("lineage", help="Show session lineage / continuity")
+    l.add_argument("session_id", nargs="?", default="", help="Optional target session_id (defaults to current session)")
 
     sp.add_parser("doctor", help="Run integrity checks")
 
@@ -109,5 +113,8 @@ def _handle(args) -> None:
             "limit": args.limit,
         }
         print(prov.handle_tool_call("sessionvault_timeline", payload))
+    elif cmd == "lineage":
+        payload = {"session_id": args.session_id}
+        print(prov.handle_tool_call("sessionvault_lineage", payload))
     else:
         print("Unknown subcommand")
