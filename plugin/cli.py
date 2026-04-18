@@ -7,6 +7,7 @@ It registers a top-level command group:
 
   hermes sessionvault status
   hermes sessionvault search "query" [--scope default|chat|workspace|global]
+  hermes sessionvault events [--from <time>] [--to <time>] [--scope ...]
   hermes sessionvault timeline --from <time> [--to <time>] [--scope ...]
   hermes sessionvault lineage [session_id]
   hermes sessionvault doctor
@@ -46,6 +47,18 @@ def register_cli(parser) -> None:
     s.add_argument("--platform", default="", help="Filter platform")
     s.add_argument("--chat-id", default="", help="Filter chat_id")
     s.add_argument("--thread-id", default="", help="Filter thread_id")
+
+    e = sp.add_parser("events", help="List structured lifecycle events")
+    e.add_argument("--from", dest="from_time", help="Inclusive start of time window (epoch or ISO datetime)")
+    e.add_argument("--to", dest="to_time", help="Inclusive end of time window (epoch or ISO datetime)")
+    e.add_argument(
+        "--scope",
+        default="default",
+        choices=["default", "chat", "workspace", "global"],
+        help="Events scope",
+    )
+    e.add_argument("--limit", type=int, default=25, help="Max results")
+    e.add_argument("--event-type", default="", help="Optional event_type filter")
 
     t = sp.add_parser("timeline", help="List raw messages by created_at range")
     t.add_argument("--from", dest="from_time", required=True, help="Inclusive start of time window (epoch or ISO datetime)")
@@ -105,6 +118,15 @@ def _handle(args) -> None:
             "thread_id": args.thread_id,
         }
         print(prov.handle_tool_call("sessionvault_search", payload))
+    elif cmd == "events":
+        payload = {
+            "from": args.from_time,
+            "to": args.to_time,
+            "scope": args.scope,
+            "limit": args.limit,
+            "event_type": args.event_type,
+        }
+        print(prov.handle_tool_call("sessionvault_events", payload))
     elif cmd == "timeline":
         payload = {
             "from": args.from_time,

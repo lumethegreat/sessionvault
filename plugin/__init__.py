@@ -98,6 +98,28 @@ DOCTOR_SCHEMA = {
     "parameters": {"type": "object", "properties": {}, "required": []},
 }
 
+EVENTS_SCHEMA = {
+    "name": "sessionvault_events",
+    "description": "List structured SessionVault lifecycle events by scope and time range.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "from": {
+                "description": "Inclusive start of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "to": {
+                "description": "Inclusive end of time window. Accepts unix epoch seconds or ISO datetime string.",
+                "anyOf": [{"type": "integer"}, {"type": "string"}],
+            },
+            "scope": {"type": "string", "enum": ["default", "chat", "workspace", "global"], "description": "Scope (default: default)."},
+            "limit": {"type": "integer", "description": "Max results (default: 25, max: 200)."},
+            "event_type": {"type": "string", "description": "Optional event_type filter."},
+        },
+        "required": [],
+    },
+}
+
 TIMELINE_SCHEMA = {
     "name": "sessionvault_timeline",
     "description": (
@@ -314,6 +336,23 @@ class SessionVaultMemoryProvider(MemoryProvider):
             resumed_from_session_id=resumed_from_session_id,
             suspended_at=suspended_at,
         )
+        try:
+            event_payload = {
+                "platform": self._origin.platform,
+                "chat_id": self._origin.chat_id,
+                "thread_id": self._origin.thread_id,
+            }
+            if explicit_previous_session_id or inferred_previous_session_id:
+                event_payload["previous_session_id"] = explicit_previous_session_id or inferred_previous_session_id
+            if split_from_session_id:
+                event_payload["split_from_session_id"] = split_from_session_id
+            if split_reason:
+                event_payload["split_reason"] = split_reason
+            if resumed_from_session_id:
+                event_payload["resumed_from_session_id"] = resumed_from_session_id
+            self._db.insert_event(self._session_id, "session_initialized", event_payload)
+        except Exception:
+            pass
         self._ensure_worker()
 
     def _ensure_worker(self) -> None:
@@ -403,6 +442,11 @@ class SessionVaultMemoryProvider(MemoryProvider):
                     text_parts.append(f"{r}: {c.strip()}")
             snapshot = "\n".join(text_parts)
             if snapshot.strip():
+                self._db.insert_event(
+                    self._session_id,
+                    "pre_compress",
+                    {"message_count": len(text_parts), "chars": len(snapshot)},
+                )
                 # Store as a special kind under a synthetic turn index
                 t = self._db.last_turn_index(self._session_id) + 1
                 self._db.append_message(self._session_id, t, "system", snapshot[:20000], kind="pre_compress_snapshot")
@@ -413,6 +457,12 @@ class SessionVaultMemoryProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         # Optional: run one more summarize job.
         try:
+            if self._db:
+                self._db.insert_event(
+                    self._session_id,
+                    "session_end",
+                    {"turn_count": int(self._turn_counter), "message_count": len(messages or [])},
+                )
             if self._cfg and self._turn_counter >= self._cfg.leaf_min_turns:
                 chunk = int(self._cfg.leaf_chunk_turns)
                 t = int(self._turn_counter)
@@ -510,7 +560,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
     # -- Tooling ---------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, TIMELINE_SCHEMA, LINEAGE_SCHEMA]
+        return [SEARCH_SCHEMA, EXPAND_SCHEMA, STATUS_SCHEMA, DOCTOR_SCHEMA, EVENTS_SCHEMA, TIMELINE_SCHEMA, LINEAGE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         try:
@@ -522,6 +572,8 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 return self._tool_status()
             if tool_name == "sessionvault_doctor":
                 return self._tool_doctor()
+            if tool_name == "sessionvault_events":
+                return self._tool_events(args)
             if tool_name == "sessionvault_timeline":
                 return self._tool_timeline(args)
             if tool_name == "sessionvault_lineage":
@@ -561,6 +613,40 @@ class SessionVaultMemoryProvider(MemoryProvider):
         if not self._db:
             return json.dumps({"error": "not initialized"})
         return json.dumps(self._db.doctor(), ensure_ascii=False)
+
+    def _tool_events(self, args: Dict[str, Any]) -> str:
+        if not self._db:
+            return json.dumps({"error": "not initialized"})
+        scope = str(args.get("scope") or "default").strip().lower()
+        limit = max(1, min(int(args.get("limit") or 25), 200))
+        created_at_from = _parse_time_value(args.get("from"))
+        created_at_to = _parse_time_value(args.get("to"))
+        event_type = str(args.get("event_type") or "").strip()
+        if created_at_from is not None and created_at_to is not None and created_at_to < created_at_from:
+            return json.dumps({"error": "'to' must be greater than or equal to 'from'"})
+
+        ws, ch, chat_key = self._resolve_scope_filters(scope)
+        session_ids = self._db.list_sessions_by_scope(
+            workspace_name=ws,
+            channel_name=ch,
+            scope_chat_key=chat_key,
+        )
+        if scope == "global":
+            session_ids = []
+
+        hits = self._db.get_events(
+            session_ids=session_ids,
+            created_at_from=created_at_from,
+            created_at_to=created_at_to,
+            event_type=event_type,
+            limit=limit,
+        )
+        return json.dumps({
+            "scope": scope,
+            "filters": {"workspace_name": ws, "channel_name": ch, "chat_key": chat_key, "event_type": event_type},
+            "window": {"from_epoch": created_at_from, "to_epoch": created_at_to},
+            "hits": hits,
+        }, ensure_ascii=False)
 
     def _tool_lineage(self, args: Dict[str, Any]) -> str:
         if not self._db:

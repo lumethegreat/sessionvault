@@ -172,6 +172,17 @@ CREATE TABLE IF NOT EXISTS summaries (
 );
 CREATE INDEX IF NOT EXISTS idx_summaries_session_range ON summaries(session_id, start_turn, end_turn, depth);
 
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_type_time ON events(event_type, created_at);
+
 -- Full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   content,
@@ -227,6 +238,20 @@ class VaultDB:
             for column, coltype in required_session_columns.items():
                 if column not in existing:
                     self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {coltype}")
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  session_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  payload_json TEXT,
+                  created_at INTEGER NOT NULL,
+                  FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                )
+                """
+            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_id, created_at)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type_time ON events(event_type, created_at)")
 
     def close(self) -> None:
         with self._lock:
@@ -296,6 +321,23 @@ class VaultDB:
             cur = self._conn.execute(
                 "INSERT INTO messages(session_id, turn_index, role, content, kind, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (session_id, int(turn_index), role, content, kind, now),
+            )
+            return int(cur.lastrowid)
+
+    def insert_event(
+        self,
+        session_id: str,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+        *,
+        created_at: Optional[int] = None,
+    ) -> int:
+        ts = int(created_at if created_at is not None else time.time())
+        payload_json = json.dumps(payload or {}, ensure_ascii=False)
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO events(session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)",
+                (session_id, event_type, payload_json, ts),
             )
             return int(cur.lastrowid)
 
@@ -369,6 +411,55 @@ class VaultDB:
                 "role": role,
                 "content": content,
                 "kind": kind,
+                "created_at": int(created_at),
+            })
+        return out
+
+    def get_events(
+        self,
+        *,
+        session_ids: Optional[List[str]] = None,
+        created_at_from: Optional[int] = None,
+        created_at_to: Optional[int] = None,
+        event_type: str = "",
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 25), 200))
+        where = []
+        params: List[Any] = []
+        if created_at_from is not None:
+            where.append("created_at >= ?")
+            params.append(int(created_at_from))
+        if created_at_to is not None:
+            where.append("created_at <= ?")
+            params.append(int(created_at_to))
+        if session_ids:
+            placeholders = ", ".join("?" for _ in session_ids)
+            where.append(f"session_id IN ({placeholders})")
+            params.extend(session_ids)
+        if event_type:
+            where.append("event_type = ?")
+            params.append(event_type)
+
+        sql = "SELECT session_id, event_type, payload_json, created_at FROM events"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at ASC, id ASC LIMIT ?"
+        params.append(limit)
+
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+
+        out = []
+        for session_id, event_type_value, payload_json, created_at in rows:
+            try:
+                payload = json.loads(payload_json or "{}")
+            except Exception:
+                payload = {"raw": payload_json}
+            out.append({
+                "session_id": session_id,
+                "event_type": event_type_value,
+                "payload": payload,
                 "created_at": int(created_at),
             })
         return out
