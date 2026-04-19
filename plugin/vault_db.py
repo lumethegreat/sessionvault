@@ -911,19 +911,4 @@ def resolve_sessionvault_db_path(hermes_home: str) -> str:
     return db_path.replace("$HERMES_HOME", str(hermes_home))
 
 
-def record_gateway_event(hermes_home: str, session_id: str, event_type: str, payload: Optional[Dict[str, Any]] = None) -> bool:
-    if not hermes_home or not session_id or not event_type:
-        return False
-    db = None
-    try:
-        db = VaultDB(resolve_sessionvault_db_path(hermes_home))
-        db.insert_event(session_id, event_type, payload or {})
-        return True
-    except Exception:
-        return False
-    finally:
-        try:
-            if db:
-                db.close()
-        except Exception:
-            pass
+

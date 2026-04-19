@@ -23,37 +23,6 @@ def make_fake_repo(tmp_path: Path) -> Path:
     scripts.mkdir()
     _copy_script(REAL_INSTALL, scripts / "install.sh")
     _copy_script(REAL_DOCTOR, scripts / "sessionvault-doctor.sh")
-    patch_helper = scripts / "sessionvault-gateway-patch.sh"
-    patch_helper.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "action=\"\"\n"
-        "hermes_home=\"\"\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in\n"
-        "    --check) action=check; shift ;;\n"
-        "    --apply) action=apply; shift ;;\n"
-        "    --hermes-home) hermes_home=\"$2\"; shift 2 ;;\n"
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-        "if [[ \"${PATCH_HELPER_MODE:-applied}\" == \"drift\" ]]; then\n"
-        "  echo 'runtime drift detected'\n"
-        "  exit 2\n"
-        "fi\n"
-        "if [[ \"$action\" == \"check\" ]]; then\n"
-        "  if [[ \"${PATCH_HELPER_MODE:-applied}\" == \"missing\" ]]; then\n"
-        "    echo 'patch not applied'\n"
-        "    exit 1\n"
-        "  fi\n"
-        "  echo 'patch already applied'\n"
-        "  exit 0\n"
-        "fi\n"
-        "echo 'patch applied'\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    patch_helper.chmod(patch_helper.stat().st_mode | stat.S_IXUSR)
     return repo
 
 
@@ -86,11 +55,9 @@ def make_db(path: Path) -> None:
     conn.close()
 
 
-def run_script(script: Path, *args: str, hermes_home: Path, patch_mode: str | None = None) -> subprocess.CompletedProcess[str]:
+def run_script(script: Path, *args: str, hermes_home: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HERMES_HOME"] = str(hermes_home)
-    if patch_mode is not None:
-        env["PATCH_HELPER_MODE"] = patch_mode
     return subprocess.run([str(script), *args], text=True, capture_output=True, check=False, env=env)
 
 

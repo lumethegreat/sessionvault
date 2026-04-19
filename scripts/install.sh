@@ -7,17 +7,14 @@ PROFILE_NAME=""
 TARGET_HERMES_HOME=""
 RUNTIME_DIR="$ROOT_HERMES_HOME/hermes-agent/plugins/memory/sessionvault"
 SRC_DIR="$REPO_ROOT/plugin"
-GATEWAY_PATCH_MODE="check"
-GATEWAY_PATCH_SCRIPT="$REPO_ROOT/scripts/sessionvault-gateway-patch.sh"
 
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") [--profile NAME] [--with-gateway-patch]
+  $(basename "$0") [--profile NAME]
 
 Options:
   --profile NAME              Target Hermes profile for config/data paths.
-  --with-gateway-patch        Apply the SessionVault gateway patch after verifying/installing plugin code.
 EOF
 }
 
@@ -31,10 +28,6 @@ while [[ $# -gt 0 ]]; do
       fi
       PROFILE_NAME="$2"
       shift 2
-      ;;
-    --with-gateway-patch)
-      GATEWAY_PATCH_MODE="apply"
-      shift
       ;;
     -h|--help)
       usage
@@ -153,45 +146,6 @@ else
   echo "ℹ No existing DB found at: $DB_PATH"
   echo "  SessionVault will create it automatically on first initialization."
 fi
-
-case "$GATEWAY_PATCH_MODE" in
-  apply)
-    if "$GATEWAY_PATCH_SCRIPT" --apply --hermes-home "$ROOT_HERMES_HOME"; then
-      echo "✓ Gateway lifecycle patch ensured"
-    else
-      echo "✗ Failed to apply gateway lifecycle patch" >&2
-      exit 1
-    fi
-    ;;
-  check)
-    set +e
-    "$GATEWAY_PATCH_SCRIPT" --check --hermes-home "$ROOT_HERMES_HOME"
-    patch_status=$?
-    set -e
-    case "$patch_status" in
-      0)
-        echo "✓ Gateway lifecycle patch already applied"
-        ;;
-      1)
-        echo "ℹ Gateway lifecycle patch not applied"
-        echo "  Apply it with: ./scripts/sessionvault-gateway-patch.sh --apply"
-        echo "  Or rerun install with: ./scripts/install.sh --with-gateway-patch"
-        ;;
-      2)
-        echo "✗ Gateway runtime drift detected; patch needs manual review" >&2
-        exit 1
-        ;;
-      *)
-        echo "✗ Gateway patch verification failed unexpectedly" >&2
-        exit "$patch_status"
-        ;;
-    esac
-    ;;
-  *)
-    echo "✗ Unknown gateway patch mode: $GATEWAY_PATCH_MODE" >&2
-    exit 64
-    ;;
-esac
 
 echo "ℹ memory.provider in $CONFIG_YAML: '$(provider_value "$CONFIG_YAML")'"
 echo "→ Next steps:"

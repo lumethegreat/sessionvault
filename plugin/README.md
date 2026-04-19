@@ -187,7 +187,7 @@ SessionVault is intended to remain a **minimalist memory substrate**:
 
 - lossless storage of turns and metadata
 - deterministic retrieval / filtering / expansion
-- timeline / lineage / event-based forensics
+- timeline / lineage / provider-recorded event forensics
 
 It is **not** meant to become a high-level workflow or planning layer.
 If richer workflow helpers are useful, they should sit above SessionVault and consume its deterministic outputs.
@@ -196,7 +196,7 @@ If richer workflow helpers are useful, they should sit above SessionVault and co
 
 ## CLI usage
 
-When `memory.provider == sessionvault`, Hermes registers the core retrieval/forensics commands:
+When `memory.provider == sessionvault`, Hermes registers the core retrieval and diagnostic commands:
 
 ```bash
 hermes sessionvault status

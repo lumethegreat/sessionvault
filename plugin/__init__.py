@@ -105,7 +105,7 @@ DOCTOR_SCHEMA = {
 
 EVENTS_SCHEMA = {
     "name": "sessionvault_events",
-    "description": "List structured SessionVault lifecycle events by scope and time range.",
+    "description": "List structured SessionVault events captured by the provider/runtime by scope and time range.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -190,7 +190,7 @@ WHAT_WERE_WE_DOING_SCHEMA = {
     "name": "sessionvault_what_were_we_doing",
     "description": (
         "Return a deterministic operational recall of the latest context: last user/assistant turns, "
-        "recent decisions, and recent lifecycle events."
+        "recent decisions, and recent recorded events."
     ),
     "parameters": {
         "type": "object",

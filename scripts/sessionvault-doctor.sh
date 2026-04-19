@@ -8,7 +8,6 @@ TARGET_HERMES_HOME=""
 PROJECT_ROOT="$ROOT_HERMES_HOME/hermes-agent"
 REPO_PLUGIN="$REPO_ROOT/plugin"
 RUNTIME_PLUGIN="$PROJECT_ROOT/plugins/memory/sessionvault"
-GATEWAY_PATCH_SCRIPT="$REPO_ROOT/scripts/sessionvault-gateway-patch.sh"
 
 usage() {
   cat <<EOF
@@ -129,31 +128,6 @@ if [[ -f "$VAULT_DB" ]]; then
 else
   echo "ℹ DB not present yet: $VAULT_DB"
   echo "  This is acceptable on a fresh install; SessionVault creates it on first initialization."
-fi
-
-echo
-if [[ -x "$GATEWAY_PATCH_SCRIPT" ]]; then
-  set +e
-  "$GATEWAY_PATCH_SCRIPT" --check --hermes-home "$ROOT_HERMES_HOME"
-  patch_status=$?
-  set -e
-  case "$patch_status" in
-    0)
-      echo "✓ Gateway lifecycle patch status: applied"
-      ;;
-    1)
-      echo "ℹ Gateway lifecycle patch status: not applied"
-      echo "  Apply with: ./scripts/sessionvault-gateway-patch.sh --apply"
-      ;;
-    2)
-      echo "✗ Gateway lifecycle patch status: runtime drift detected"
-      ;;
-    *)
-      echo "✗ Gateway lifecycle patch check failed with exit code: $patch_status"
-      ;;
-  esac
-else
-  echo "✗ Gateway patch helper missing or not executable: $GATEWAY_PATCH_SCRIPT"
 fi
 
 echo

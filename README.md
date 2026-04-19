@@ -63,10 +63,8 @@ Current runtime origin used for this extraction:
 ## Repository layout
 
 - `plugin/` — the plugin code installed into Hermes runtime
-- `scripts/install.sh` — install plugin code into Hermes runtime and verify gateway patch status
-- `scripts/sessionvault-gateway-patch.sh` — apply/check the local gateway lifecycle patch idempotently
+- `scripts/install.sh` — install plugin code into Hermes runtime
 - `scripts/sessionvault-doctor.sh` — inspect repo/runtime/data status
-- `references/hermes-gateway-run-sessionvault-events.patch` — local gateway patch that records gateway/session-control events into SessionVault
 - `INSTALL.md` — installation and upgrade instructions
 
 ## Architecture
@@ -123,11 +121,9 @@ From the repo root:
 ```bash
 # default profile
 ./scripts/install.sh
-./scripts/install.sh --with-gateway-patch
 
 # named profile
 ./scripts/install.sh --profile kimi
-./scripts/install.sh --profile kimi --with-gateway-patch
 ```
 
 The install script is idempotent for the shared runtime:
@@ -166,15 +162,13 @@ hermes sessionvault doctor
 
 1. Edit code in this repo.
 2. Run `scripts/install.sh` or `scripts/install.sh --profile <name>` to align the shared runtime and prepare the target profile.
-3. Add `--with-gateway-patch` when you also want to ensure the shared gateway patch.
-4. Restart Hermes gateway or CLI.
-5. Verify with `hermes memory status`, `hermes sessionvault status`, and `./scripts/sessionvault-doctor.sh [--profile <name>]`.
-6. Use `./scripts/sessionvault-gateway-patch.sh --check` if gateway/runtime drift is suspected.
+3. Restart Hermes gateway or CLI.
+4. Verify with `hermes memory status`, `hermes sessionvault status`, and `./scripts/sessionvault-doctor.sh [--profile <name>]`.
 
 ## CLI and tool usage
 
 ### CLI
-When active, SessionVault registers core retrieval/forensics commands:
+When active, SessionVault registers core retrieval and diagnostic commands:
 
 ```bash
 hermes sessionvault status
@@ -257,12 +251,6 @@ hermes sessionvault recent-decisions --scope chat --limit 5
 hermes sessionvault what-were-we-doing --scope chat --limit 5
 ```
 
-### Ensure the gateway patch is present
-```bash
-./scripts/sessionvault-gateway-patch.sh --check
-./scripts/sessionvault-gateway-patch.sh --apply
-```
-
 ### Run health checks
 ```bash
 hermes sessionvault doctor
@@ -272,15 +260,12 @@ hermes sessionvault doctor
 ## Safety and operational notes
 
 - The install flow targets a **shared runtime** plus a **selected profile home**.
-- The install flow only applies the gateway patch when you opt into `--with-gateway-patch`.
 - The target profile SQLite DB is preserved.
 - If the target profile DB is absent, the plugin creates it on first use.
 - Runtime edits under `~/.hermes/hermes-agent/` can drift from this repo; reinstall from the repo to re-align them.
 - `scripts/install.sh` now skips reinstall when the shared runtime plugin is already aligned with the repo.
 - Discord thread/forum sessions can optionally persist `parent_chat_id` and `parent_chat_name` when the gateway origin supplies them.
-- Gateway/session-control integration currently also uses a local Hermes runtime patch; see `references/hermes-gateway-run-sessionvault-events.patch`.
-- `scripts/sessionvault-gateway-patch.sh` can verify whether that patch is already present or apply it idempotently.
-- Because SessionVault imports Hermes internals, compatibility should be checked after Hermes updates.
+- Because SessionVault imports Hermes internals, compatibility should still be checked after Hermes updates, but the plugin no longer depends on a local patch to Hermes core files.
 
 ## Troubleshooting
 
@@ -300,7 +285,6 @@ Run:
 ```bash
 ./scripts/sessionvault-doctor.sh
 ./scripts/sessionvault-doctor.sh --profile kimi
-./scripts/sessionvault-gateway-patch.sh --check
 ```
 
 Then re-align from the repo with:
@@ -308,11 +292,6 @@ Then re-align from the repo with:
 ```bash
 ./scripts/install.sh
 ./scripts/install.sh --profile kimi
-# or ensure the gateway patch is present too
-./scripts/install.sh --with-gateway-patch
-./scripts/install.sh --profile kimi --with-gateway-patch
-# or apply just the gateway patch
-./scripts/sessionvault-gateway-patch.sh --apply
 ```
 
 ### “Will this repo overwrite my history?”

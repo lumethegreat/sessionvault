@@ -27,7 +27,7 @@ def test_provider_recent_decisions_extracts_decision_like_turns(tmp_path):
     provider_mod = load_provider_module()
     provider = provider_mod.SessionVaultMemoryProvider()
     provider.initialize(session_id="s1", hermes_home=str(tmp_path), platform="cli", agent_context="primary", agent_identity="cli")
-    provider.sync_turn("Can we postpone this?", "We decided to ship the gateway patch today.")
+    provider.sync_turn("Can we postpone this?", "We decided to ship the provider cleanup today.")
     provider.sync_turn("ok podes avançar", "Próximo passo natural: implementar recent decisions.")
     provider.sync_turn("just chatting", "This sentence is descriptive only.")
     with provider._db._lock:
