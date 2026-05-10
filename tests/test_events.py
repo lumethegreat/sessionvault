@@ -87,23 +87,23 @@ def test_provider_records_and_returns_lifecycle_events(tmp_path):
     provider.shutdown()
 
 
-def test_record_gateway_event_helper_writes_to_vault(tmp_path):
-    module = load_module("sessionvault_vault_db_event_helper", "vault_db.py")
-    hermes_home = tmp_path
-    db_path = hermes_home / "sessionvault" / "vault.db"
-    db = module.VaultDB(str(db_path))
-    try:
-        origin = module.OriginScope(platform="discord", chat_id="chat-1", thread_id="thread-1", workspace_name="ws", channel_name="#general")
-        db.upsert_session("s1", origin)
-    finally:
-        db.close()
+def test_provider_switches_session_target_for_future_turns(tmp_path):
+    provider_mod = load_provider_module()
+    provider = provider_mod.SessionVaultMemoryProvider()
+    provider.initialize(session_id="s1", hermes_home=str(tmp_path), platform="cli", agent_context="primary", agent_identity="cli")
+    provider.sync_turn("old user", "old assistant")
 
-    written = module.record_gateway_event(str(hermes_home), "s1", "session_split", {"new_session_id": "s2"})
-    assert written is True
+    provider.on_session_switch("s2", parent_session_id="s1", reset=True, reason="new_session")
+    provider.sync_turn("new user", "new assistant")
 
-    db2 = module.VaultDB(str(db_path))
     try:
-        events = db2.get_events(session_ids=["s1"], limit=10)
+        old_messages = provider._db.get_messages_range("s1", 1, 10)
+        new_messages = provider._db.get_messages_range("s2", 1, 10)
+        new_events = provider._db.get_events(session_ids=["s2"], limit=10)
     finally:
-        db2.close()
-    assert any(event["event_type"] == "session_split" for event in events)
+        provider.shutdown()
+
+    assert [message["content"] for message in old_messages] == ["old user", "old assistant"]
+    assert [message["content"] for message in new_messages] == ["new user", "new assistant"]
+    assert new_messages[0]["turn_index"] == 1
+    assert any(event["event_type"] == "session_initialized" for event in new_events)

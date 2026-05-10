@@ -419,6 +419,92 @@ class SessionVaultMemoryProvider(MemoryProvider):
             pass
         self._ensure_worker()
 
+    def on_session_switch(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        **kwargs,
+    ) -> None:
+        new_session_id = str(new_session_id or "").strip()
+        if not new_session_id:
+            return
+
+        old_session_id = self._session_id
+        self._session_id = new_session_id
+
+        with self._prefetch_lock:
+            self._prefetch_cached = ""
+
+        if not self._db:
+            return
+
+        if self._platform == "cli":
+            self._origin = OriginScope(
+                platform="cli",
+                chat_id="cli",
+                thread_id="",
+                chat_type="cli",
+                chat_name="CLI",
+                user_id=self._agent_identity or "cli",
+                workspace_name=self._agent_identity or "cli",
+                channel_name="#cli",
+            )
+        else:
+            switched_origin = load_origin_from_sessions_index(self._hermes_home, new_session_id)
+            if switched_origin.platform:
+                self._origin = switched_origin
+            if not self._origin.platform:
+                self._origin.platform = self._platform or ""
+            if not self._origin.workspace_name or not self._origin.channel_name:
+                self._origin.workspace_name = self._origin.workspace_name or self._origin.scope_chat_key()
+                self._origin.channel_name = self._origin.channel_name or (self._origin.chat_name or self._origin.chat_id or "")
+
+        reason = str(kwargs.get("reason") or "").strip()
+        parent_session_id = str(parent_session_id or old_session_id or "").strip()
+        previous_session_id = ""
+        split_from_session_id = ""
+        split_reason = ""
+        resumed_from_session_id = ""
+
+        if reason == "compression":
+            split_from_session_id = parent_session_id
+            split_reason = "compression"
+        elif reason == "resume":
+            resumed_from_session_id = parent_session_id
+        else:
+            previous_session_id = parent_session_id
+
+        try:
+            self._db.upsert_session(
+                self._session_id,
+                self._origin,
+                previous_session_id=previous_session_id,
+                split_from_session_id=split_from_session_id,
+                split_reason=split_reason,
+                resumed_from_session_id=resumed_from_session_id,
+            )
+            self._turn_counter = self._db.last_turn_index(self._session_id)
+            event_payload = {
+                "platform": self._origin.platform,
+                "chat_id": self._origin.chat_id,
+                "thread_id": self._origin.thread_id,
+                "reason": reason,
+                "reset": bool(reset),
+            }
+            if previous_session_id:
+                event_payload["previous_session_id"] = previous_session_id
+            if split_from_session_id:
+                event_payload["split_from_session_id"] = split_from_session_id
+            if split_reason:
+                event_payload["split_reason"] = split_reason
+            if resumed_from_session_id:
+                event_payload["resumed_from_session_id"] = resumed_from_session_id
+            self._db.insert_event(self._session_id, "session_initialized", event_payload)
+        except Exception as e:
+            logger.debug("SessionVault on_session_switch failed: %s", e)
+
     def _ensure_worker(self) -> None:
         if self._worker and self._worker.is_alive():
             return
