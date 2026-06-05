@@ -9,6 +9,7 @@ It stores raw conversation turns in a profile-scoped SQLite database and adds:
 - session lineage / continuity metadata across related sessions
 - structured lifecycle events (`session_initialized`, `pre_compress`, `session_end`, ...)
 - scoped recall by chat/workspace when available
+- automatic scoped auto-recall before each turn, including older relevant turns from the current session while suppressing recent echo
 - optional incremental summaries stored alongside raw messages
 - model tools for `sessionvault_search`, `sessionvault_expand`, `sessionvault_timeline`, `sessionvault_lineage`, `sessionvault_status`, and `sessionvault_doctor`
 
@@ -96,6 +97,37 @@ Current search behaviour is:
 - FTS-driven
 - scoped to workspace/chat when the origin can be derived
 - falls back to chat-level scope when workspace parsing is not reliable
+
+### Auto-recall model
+SessionVault uses Hermes' standard memory-provider `prefetch(query)` hook to inject a compact context block before each turn. This is plugin-only: Hermes core wraps the returned text in `<memory-context>` and adds it to the current user message for that API call only.
+
+Default auto-recall behaviour:
+- runs synchronously for the current turn, so a new thread can receive context immediately
+- searches the current chat/workspace scope first
+- suppresses low-signal queries such as `ok`, `sim`, and `faz isso`
+- suppresses the most recent turns from the current session to avoid echoing the live conversation
+- can still include older relevant turns from the current session, useful after long conversations or compression
+- deprioritizes older current-session hits behind other sessions by default
+- does not use global profile-wide fallback unless explicitly enabled
+- deduplicates recently injected hits to avoid repeating the same context every turn
+
+Optional config keys in `<HERMES_HOME>/sessionvault/config.json`:
+
+```json
+{
+  "auto_recall_enabled": true,
+  "auto_recall_limit": 6,
+  "auto_recall_max_chars": 2500,
+  "auto_recall_min_query_chars": 12,
+  "auto_recall_exclude_recent_turns": 2,
+  "auto_recall_current_session_mode": "deprioritize",
+  "auto_recall_include_summaries": true,
+  "auto_recall_include_messages": true,
+  "auto_recall_global_fallback": false
+}
+```
+
+`auto_recall_current_session_mode` accepts `include`, `exclude`, or `deprioritize`.
 
 ### Summary model
 SessionVault uses an LLM only for optional summaries.

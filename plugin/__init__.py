@@ -220,6 +220,11 @@ _DECISION_RULES = [
     ("implementar", re.compile(r"\bimplement(?:ar|ed|ing)?\b", re.IGNORECASE)),
 ]
 
+_RECALL_LOW_SIGNAL_RE = re.compile(
+    r"^(ok|sim|nao|não|continua|faz isso|perfeito|boa|obrigad[oa]|thanks|yes|no)$",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class _Config:
@@ -228,6 +233,15 @@ class _Config:
     leaf_min_turns: int = 10
     summary_model: str = ""
     summary_provider: str = ""
+    auto_recall_enabled: bool = True
+    auto_recall_limit: int = 6
+    auto_recall_max_chars: int = 2500
+    auto_recall_min_query_chars: int = 12
+    auto_recall_exclude_recent_turns: int = 2
+    auto_recall_current_session_mode: str = "deprioritize"
+    auto_recall_include_summaries: bool = True
+    auto_recall_include_messages: bool = True
+    auto_recall_global_fallback: bool = False
 
 
 def _default_config(hermes_home: str) -> _Config:
@@ -246,16 +260,39 @@ def _load_config(hermes_home: str) -> _Config:
     d = _default_config(hermes_home)
     if isinstance(cfg.get("db_path"), str) and cfg.get("db_path"):
         d.db_path = cfg["db_path"].replace("$HERMES_HOME", str(hermes_home))
-    for k in ("leaf_chunk_turns", "leaf_min_turns"):
+    for k in (
+        "leaf_chunk_turns",
+        "leaf_min_turns",
+        "auto_recall_limit",
+        "auto_recall_max_chars",
+        "auto_recall_min_query_chars",
+        "auto_recall_exclude_recent_turns",
+    ):
         if cfg.get(k) is not None:
             try:
                 setattr(d, k, int(cfg[k]))
             except Exception:
                 pass
+    for k in (
+        "auto_recall_enabled",
+        "auto_recall_include_summaries",
+        "auto_recall_include_messages",
+        "auto_recall_global_fallback",
+    ):
+        if cfg.get(k) is not None:
+            value = cfg[k]
+            if isinstance(value, bool):
+                setattr(d, k, value)
+            elif isinstance(value, str):
+                setattr(d, k, value.strip().lower() in {"1", "true", "yes", "on"})
     if isinstance(cfg.get("summary_model"), str):
         d.summary_model = cfg.get("summary_model", "")
     if isinstance(cfg.get("summary_provider"), str):
         d.summary_provider = cfg.get("summary_provider", "")
+    if isinstance(cfg.get("auto_recall_current_session_mode"), str):
+        mode = cfg.get("auto_recall_current_session_mode", "").strip().lower()
+        if mode in {"include", "exclude", "deprioritize"}:
+            d.auto_recall_current_session_mode = mode
     return d
 
 
@@ -314,6 +351,7 @@ class SessionVaultMemoryProvider(MemoryProvider):
 
         self._prefetch_lock = threading.Lock()
         self._prefetch_cached = ""
+        self._recent_auto_recall_keys: List[str] = []
 
         self._work_q: "queue.Queue[tuple]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
@@ -336,6 +374,13 @@ class SessionVaultMemoryProvider(MemoryProvider):
             {"key": "leaf_min_turns", "description": "Minimum turns before summarizing (default: 10)", "default": "10"},
             {"key": "summary_model", "description": "Optional summary model override (default: use auxiliary compression defaults)", "default": ""},
             {"key": "summary_provider", "description": "Optional summary provider override", "default": ""},
+            {"key": "auto_recall_enabled", "description": "Inject relevant SessionVault context before each turn (default: true)", "default": "true"},
+            {"key": "auto_recall_limit", "description": "Maximum auto-recall hits to inject (default: 6)", "default": "6"},
+            {"key": "auto_recall_max_chars", "description": "Maximum characters in the auto-recall block (default: 2500)", "default": "2500"},
+            {"key": "auto_recall_min_query_chars", "description": "Minimum query length before auto-recall runs (default: 12)", "default": "12"},
+            {"key": "auto_recall_exclude_recent_turns", "description": "Recent turns from the current session to suppress as echo (default: 2)", "default": "2"},
+            {"key": "auto_recall_current_session_mode", "description": "How to treat older hits from the current session: include, exclude, or deprioritize (default: deprioritize)", "default": "deprioritize"},
+            {"key": "auto_recall_global_fallback", "description": "Allow profile-wide fallback when scoped recall finds nothing (default: false)", "default": "false"},
         ]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
@@ -576,8 +621,151 @@ class SessionVaultMemoryProvider(MemoryProvider):
             pass
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        with self._prefetch_lock:
-            return self._prefetch_cached or ""
+        if not self._cfg or not self._cfg.auto_recall_enabled:
+            return ""
+        return self._build_auto_recall_context(query)
+
+    def _normalize_recall_query(self, query: str) -> str:
+        text = re.sub(r"\s+", " ", str(query or "")).strip()
+        if not text:
+            return ""
+        if len(text) < max(1, int(self._cfg.auto_recall_min_query_chars if self._cfg else 12)):
+            return ""
+        if _RECALL_LOW_SIGNAL_RE.fullmatch(text):
+            return ""
+        if not re.search(r"[\wÀ-ÿ]", text, re.UNICODE):
+            return ""
+        return text[:5000]
+
+    def _build_auto_recall_context(self, query: str) -> str:
+        if not self._db or not self._cfg:
+            return ""
+        normalized = self._normalize_recall_query(query)
+        if not normalized:
+            return ""
+
+        scopes = ["default"]
+        ws_default, ch_default, chat_default = self._resolve_scope_filters("default")
+        ws_workspace, ch_workspace, chat_workspace = self._resolve_scope_filters("workspace")
+        if (ws_workspace, ch_workspace, chat_workspace) != (ws_default, ch_default, chat_default):
+            scopes.append("workspace")
+        if self._cfg.auto_recall_global_fallback:
+            scopes.append("global")
+
+        selected_summaries: List[Dict[str, Any]] = []
+        selected_messages: List[Dict[str, Any]] = []
+        seen: set = set()
+        target_count = max(1, int(self._cfg.auto_recall_limit))
+
+        for scope in scopes:
+            ws, ch, chat_key = self._resolve_scope_filters(scope)
+            hits = self._db.search(
+                normalized,
+                workspace_name=ws,
+                channel_name=ch,
+                scope_chat_key=chat_key,
+                limit=target_count * 2,
+                include_summaries=bool(self._cfg.auto_recall_include_summaries),
+                include_messages=bool(self._cfg.auto_recall_include_messages),
+                kind=["turn"],
+            )
+            for summary in hits.get("summaries", []):
+                key = self._auto_recall_key(summary, is_summary=True)
+                if not key or key in seen or key in self._recent_auto_recall_keys:
+                    continue
+                if self._cfg.auto_recall_current_session_mode == "exclude" and summary.get("session_id") == self._session_id:
+                    continue
+                seen.add(key)
+                selected_summaries.append(summary)
+            current_session_mode = self._cfg.auto_recall_current_session_mode
+            messages = [m for m in hits.get("messages", []) if self._auto_recall_message_allowed(m)]
+            messages.sort(key=lambda m: 1 if m.get("session_id") == self._session_id and current_session_mode == "deprioritize" else 0)
+            for message in messages:
+                key = self._auto_recall_key(message, is_summary=False)
+                if not key or key in seen or key in self._recent_auto_recall_keys:
+                    continue
+                seen.add(key)
+                selected_messages.append(message)
+            if len(selected_summaries) + len(selected_messages) >= target_count:
+                break
+
+        if not selected_summaries and not selected_messages:
+            return ""
+
+        block = self._format_auto_recall_block(selected_summaries, selected_messages, target_count)
+        if not block:
+            return ""
+
+        emitted_keys = [
+            self._auto_recall_key(item, is_summary=True)
+            for item in selected_summaries[:target_count]
+        ] + [
+            self._auto_recall_key(item, is_summary=False)
+            for item in selected_messages[:target_count]
+        ]
+        for key in emitted_keys:
+            if not key:
+                continue
+            self._recent_auto_recall_keys.append(key)
+        if len(self._recent_auto_recall_keys) > 64:
+            self._recent_auto_recall_keys = self._recent_auto_recall_keys[-64:]
+        return block
+
+    def _auto_recall_message_allowed(self, hit: Dict[str, Any]) -> bool:
+        if hit.get("kind") != "turn":
+            return False
+        if self._cfg and self._cfg.auto_recall_current_session_mode == "exclude" and hit.get("session_id") == self._session_id:
+            return False
+        if hit.get("session_id") != self._session_id:
+            return True
+        recent_turns = max(0, int(self._cfg.auto_recall_exclude_recent_turns if self._cfg else 2))
+        last_turn = self._turn_counter
+        if self._db:
+            try:
+                last_turn = max(last_turn, self._db.last_turn_index(self._session_id))
+            except Exception:
+                pass
+        return int(hit.get("turn_index") or 0) <= max(0, last_turn - recent_turns)
+
+    def _auto_recall_key(self, hit: Dict[str, Any], *, is_summary: bool) -> str:
+        session_id = str(hit.get("session_id") or "")
+        if not session_id:
+            return ""
+        if is_summary:
+            return f"{session_id}:summary:{hit.get('start_turn')}:{hit.get('end_turn')}"
+        return f"{session_id}:turn:{hit.get('turn_index')}:{hit.get('role')}"
+
+    def _format_auto_recall_block(
+        self,
+        summaries: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        target_count: int,
+    ) -> str:
+        remaining = max(1, target_count)
+        lines = [
+            "### SessionVault auto-recall",
+            "Contexto possivelmente relevante de conversas anteriores ou de partes antigas desta sessão. Usa apenas como background; se estiver desactualizado, privilegia a conversa actual.",
+        ]
+        if summaries and remaining > 0:
+            lines.append("")
+            lines.append("#### Summaries")
+            for h in summaries[:remaining]:
+                lines.append(f"- ({h['session_id']} t{h['start_turn']}..t{h['end_turn']}) {self._clean_recall_snippet(h['snippet'])}")
+            remaining -= min(len(summaries), remaining)
+        if messages and remaining > 0:
+            lines.append("")
+            lines.append("#### Messages")
+            for h in messages[:remaining]:
+                lines.append(f"- ({h['session_id']} t{h['turn_index']} {h['role']}) {self._clean_recall_snippet(h['snippet'])}")
+
+        block = "\n".join(lines).strip()
+        max_chars = max(500, int(self._cfg.auto_recall_max_chars if self._cfg else 2500))
+        if len(block) > max_chars:
+            block = block[: max_chars - 3].rstrip() + "..."
+        return block
+
+    def _clean_recall_snippet(self, snippet: str) -> str:
+        return str(snippet or "").replace("[", "").replace("]", "")
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
         # Ensure we persist a snapshot of what is about to be compacted.
@@ -762,6 +950,15 @@ class SessionVaultMemoryProvider(MemoryProvider):
                 "leaf_min_turns": self._cfg.leaf_min_turns,
                 "summary_model": self._cfg.summary_model,
                 "summary_provider": self._cfg.summary_provider,
+                "auto_recall_enabled": self._cfg.auto_recall_enabled,
+                "auto_recall_limit": self._cfg.auto_recall_limit,
+                "auto_recall_max_chars": self._cfg.auto_recall_max_chars,
+                "auto_recall_min_query_chars": self._cfg.auto_recall_min_query_chars,
+                "auto_recall_exclude_recent_turns": self._cfg.auto_recall_exclude_recent_turns,
+                "auto_recall_current_session_mode": self._cfg.auto_recall_current_session_mode,
+                "auto_recall_include_summaries": self._cfg.auto_recall_include_summaries,
+                "auto_recall_include_messages": self._cfg.auto_recall_include_messages,
+                "auto_recall_global_fallback": self._cfg.auto_recall_global_fallback,
             }
         }, ensure_ascii=False)
 
