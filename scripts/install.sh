@@ -5,7 +5,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT_HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PROFILE_NAME=""
 TARGET_HERMES_HOME=""
-RUNTIME_DIR="$ROOT_HERMES_HOME/hermes-agent/plugins/memory/sessionvault"
+RUNTIME_DIR="$ROOT_HERMES_HOME/plugins/sessionvault"
+LEGACY_RUNTIME_DIR="$ROOT_HERMES_HOME/hermes-agent/plugins/memory/sessionvault"
 SRC_DIR="$REPO_ROOT/plugin"
 
 usage() {
@@ -124,6 +125,7 @@ fi
 echo "SessionVault install"
 echo "Repo plugin: $SRC_DIR"
 echo "Runtime plugin: $RUNTIME_DIR"
+echo "Legacy runtime plugin (ignored): $LEGACY_RUNTIME_DIR"
 echo "Target profile: $TARGET_PROFILE_LABEL"
 echo "Target home: $TARGET_HERMES_HOME"
 echo "Target config: $CONFIG_YAML"

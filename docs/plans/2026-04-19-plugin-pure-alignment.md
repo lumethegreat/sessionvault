@@ -4,7 +4,7 @@
 
 ## Decisions locked in
 - `gateway/run.py` must stay upstream / restorable via `git restore`.
-- SessionVault must live entirely as plugin code under `plugins/memory/sessionvault`.
+- SessionVault must live entirely as plugin code under the Hermes user plugin directory, currently `~/.hermes/plugins/sessionvault` on Hermes v0.15+.
 - Features that required a core patch are removed rather than kept as optional dead/legacy paths.
 - Repo scripts and docs must stop recommending or checking a gateway patch.
 

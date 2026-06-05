@@ -38,7 +38,8 @@ This is an external/local Hermes plugin extracted from a working local installat
 It is **not** a native built-in Hermes plugin.
 
 Current runtime origin used for this extraction:
-- runtime plugin: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
+- user plugin: `~/.hermes/plugins/sessionvault`
+- legacy runtime-tree plugin path, ignored on Hermes v0.15+: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
 - repo scripts: `/Users/mestre/projects/sessionvault/scripts`
 
 ## Feature overview
@@ -63,8 +64,8 @@ Current runtime origin used for this extraction:
 
 ## Repository layout
 
-- `plugin/` — the plugin code installed into Hermes runtime
-- `scripts/install.sh` — install plugin code into Hermes runtime
+- `plugin/` — the plugin code installed into the Hermes user plugin directory
+- `scripts/install.sh` — install plugin code into the Hermes user plugin directory
 - `scripts/sessionvault-doctor.sh` — inspect repo/runtime/data status
 - `INSTALL.md` — installation and upgrade instructions
 

@@ -28,6 +28,7 @@ def make_fake_repo(tmp_path: Path) -> Path:
 
 def make_hermes_home(tmp_path: Path) -> Path:
     hermes_home = tmp_path / ".hermes"
+    (hermes_home / "plugins").mkdir(parents=True, exist_ok=True)
     (hermes_home / "hermes-agent" / "plugins" / "memory").mkdir(parents=True, exist_ok=True)
     (hermes_home / "hermes-agent" / "gateway").mkdir(parents=True, exist_ok=True)
     (hermes_home / "hermes-agent" / "gateway" / "run.py").write_text("print('gateway')\n", encoding="utf-8")
@@ -78,8 +79,11 @@ def test_install_profile_targets_profile_data_and_skips_reinstall_when_aligned(t
 
     first = run_script(repo / "scripts" / "install.sh", "--profile", "kimi", hermes_home=hermes_home)
     assert first.returncode == 0
-    runtime_plugin = hermes_home / "hermes-agent" / "plugins" / "memory" / "sessionvault"
+    runtime_plugin = hermes_home / "plugins" / "sessionvault"
+    legacy_runtime_plugin = hermes_home / "hermes-agent" / "plugins" / "memory" / "sessionvault"
     assert (runtime_plugin / "plugin.yaml").exists()
+    assert not legacy_runtime_plugin.exists()
+    assert f"Runtime plugin: {runtime_plugin}" in first.stdout
     assert (profile_home / "sessionvault").exists()
     assert "Target profile: kimi" in first.stdout
     assert str(profile_home / "sessionvault" / "vault.db") in first.stdout
@@ -93,10 +97,14 @@ def test_doctor_profile_reads_profile_config_and_db(tmp_path):
     repo = make_fake_repo(tmp_path)
     hermes_home = make_hermes_home(tmp_path)
     profile_home = make_profile(hermes_home, "kimi", provider="sessionvault")
-    runtime_plugin = hermes_home / "hermes-agent" / "plugins" / "memory" / "sessionvault"
+    runtime_plugin = hermes_home / "plugins" / "sessionvault"
+    legacy_runtime_plugin = hermes_home / "hermes-agent" / "plugins" / "memory" / "sessionvault"
     runtime_plugin.mkdir(parents=True, exist_ok=True)
     (runtime_plugin / "plugin.yaml").write_text("name: sessionvault\n", encoding="utf-8")
     (runtime_plugin / "provider.py").write_text("print('ok')\n", encoding="utf-8")
+    # A stale legacy runtime-tree directory must not be treated as authoritative.
+    legacy_runtime_plugin.mkdir(parents=True, exist_ok=True)
+    (legacy_runtime_plugin / "only-pyc.pyc").write_bytes(b"stale")
     make_db(profile_home / "sessionvault" / "vault.db")
 
     result = run_script(repo / "scripts" / "sessionvault-doctor.sh", "--profile", "kimi", hermes_home=hermes_home)
@@ -104,5 +112,7 @@ def test_doctor_profile_reads_profile_config_and_db(tmp_path):
     assert result.returncode == 0
     assert "target profile: kimi" in result.stdout.lower()
     assert f"Config: {profile_home / 'config.yaml'}" in result.stdout
+    assert f"Runtime: {runtime_plugin}" in result.stdout
+    assert f"Legacy runtime (ignored): {legacy_runtime_plugin}" in result.stdout
     assert f"DB: {profile_home / 'sessionvault' / 'vault.db'}" in result.stdout
     assert "config memory.provider: 'sessionvault'" in result.stdout

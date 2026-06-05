@@ -14,7 +14,8 @@ SessionVault now distinguishes between:
 
 Default paths in this environment:
 - repo: `~/projects/sessionvault`
-- shared runtime plugin destination: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
+- shared user plugin destination: `~/.hermes/plugins/sessionvault`
+- legacy runtime-tree plugin path, ignored on Hermes v0.15+: `~/.hermes/hermes-agent/plugins/memory/sessionvault`
 - default profile data directory: `~/.hermes/sessionvault`
 - named profile data directory: `~/.hermes/profiles/<name>/sessionvault`
 - default profile DB: `~/.hermes/sessionvault/vault.db`
@@ -33,16 +34,16 @@ If the target profile DB does not exist:
 - installation still succeeds
 - the plugin creates the DB and schema automatically on first initialization
 
-### Idempotent shared-runtime handling
-The install flow now checks the shared runtime plugin first:
-- if runtime code already matches the repo, install **skips reinstall**
-- if runtime code differs, install re-aligns it from `plugin/`
+### Idempotent shared-plugin handling
+The install flow now checks the shared user plugin first:
+- if installed plugin code already matches the repo, install **skips reinstall**
+- if installed plugin code differs, install re-aligns it from `plugin/`
 
 ## Prerequisites
 
 - Hermes Agent already installed via the normal Hermes install flow
-- a valid Hermes runtime checkout at `~/.hermes/hermes-agent`
-- write access to that runtime
+- a valid Hermes home at `~/.hermes`
+- write access to the user plugin directory under that home
 - if using `--profile NAME`, the profile must already exist at `~/.hermes/profiles/NAME`
 
 ## Install from this repo
@@ -60,9 +61,9 @@ From the repo root:
 ```
 
 This will:
-- verify whether shared runtime plugin code is already aligned
+- verify whether shared user plugin code is already aligned
 - skip reinstall if already aligned
-- otherwise copy `plugin/` into `~/.hermes/hermes-agent/plugins/memory/sessionvault`
+- otherwise copy `plugin/` into `~/.hermes/plugins/sessionvault`
 - prepare the target profile data dir under `<target-hermes-home>/sessionvault/`
 - preserve any existing DB for that target profile
 
